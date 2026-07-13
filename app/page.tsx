@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Item = { id: string; title: string; image: string };
-type GameData = { title?: string; subtitle?: string; items: Item[] };
+type GameData = { categoryId: string; title?: string; subtitle?: string; items: Item[] };
 type TelegramWebApp = {
   ready: () => void;
   expand: () => void;
@@ -26,6 +26,7 @@ export default function Home() {
   const [status, setStatus] = useState("");
   const [sharing, setSharing] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
 
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
@@ -33,9 +34,13 @@ export default function Home() {
     webApp?.expand();
     webApp?.setHeaderColor?.("#0b0f17");
     webApp?.setBackgroundColor?.("#0b0f17");
-    setChatId(new URLSearchParams(window.location.search).get("chat_id"));
+    const params = new URLSearchParams(window.location.search);
+    const requestedChatId = params.get("chat_id");
+    const requestedCategoryId = params.get("category_id");
+    setChatId(requestedChatId);
+    setCategoryId(requestedCategoryId);
 
-    fetch("/game-data.json", { cache: "no-store" })
+    fetch(`/api/game${requestedCategoryId ? `?category_id=${encodeURIComponent(requestedCategoryId)}` : ""}`, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("Konfiguration konnte nicht geladen werden.");
         return response.json() as Promise<GameData>;
@@ -76,6 +81,7 @@ export default function Home() {
         body: JSON.stringify({
           initData: window.Telegram?.WebApp.initData ?? "",
           chatId,
+          categoryId: game?.categoryId ?? categoryId,
           ranking: ranking.map((item, index) => ({ position: index + 1, title: item?.title ?? "–" }))
         })
       });
