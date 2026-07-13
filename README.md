@@ -115,3 +115,49 @@ Die Demo verwendet externe Unsplash-Bild-URLs. Für eine öffentliche oder komme
 - Timer
 - echte Spielräume und gemeinsame Runden
 - Admin-Oberfläche
+
+# Eigene Namen und Bilder festlegen
+
+Die Spielinhalte liegen jetzt in nur einer Datei:
+
+```text
+public/game-data.json
+```
+
+## Namen oder externe Bild-URLs ändern
+
+1. Öffne dein GitHub-Repository.
+2. Öffne `public` → `game-data.json`.
+3. Klicke auf das Stift-Symbol zum Bearbeiten.
+4. Ändere bei jedem Eintrag `title` und `image`.
+5. Klicke auf `Commit changes`.
+6. Vercel veröffentlicht die Änderung automatisch.
+
+Beispiel:
+
+```json
+{
+  "id": "messi",
+  "title": "Lionel Messi",
+  "image": "https://example.com/messi.jpg"
+}
+```
+
+## Eigene Bilddateien hochladen
+
+1. Lade dein Bild in GitHub in den Ordner `public/items` hoch, z. B. `messi.jpg`.
+2. Trage in `public/game-data.json` als Bildpfad ein:
+
+```json
+"image": "/items/messi.jpg"
+```
+
+Dateinamen am besten nur mit Kleinbuchstaben, Zahlen und Bindestrichen verwenden. Unterstützt werden übliche Webformate wie JPG, PNG und WebP.
+
+## Anzahl der Rankingplätze ändern
+
+Die Anzahl der Einträge in `items` bestimmt automatisch die Anzahl der Plätze. Unterstützt werden 2 bis 10 Einträge. Für klassisches Blind Ranking sind 5 Einträge empfohlen.
+
+## Dark Mode
+
+Die Mini App verwendet jetzt dauerhaft einen dunklen Modus, einschließlich dunkler Telegram-Kopf- und Hintergrundfarbe.

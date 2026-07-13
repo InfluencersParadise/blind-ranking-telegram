@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Item = { id: string; title: string; image: string };
+type GameData = { title?: string; subtitle?: string; items: Item[] };
 type TelegramWebApp = {
   ready: () => void;
   expand: () => void;
   initData: string;
   close: () => void;
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
   HapticFeedback?: { impactOccurred: (style: string) => void };
 };
 
@@ -15,29 +18,44 @@ declare global {
   interface Window { Telegram?: { WebApp: TelegramWebApp } }
 }
 
-const items: Item[] = [
-  { id: "pizza", title: "Pizza", image: "https://images.unsplash.com/photo-1579751626657-72bc17010498?auto=format&fit=crop&w=1200&q=80" },
-  { id: "burger", title: "Burger", image: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=1200&q=80" },
-  { id: "sushi", title: "Sushi", image: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?auto=format&fit=crop&w=1200&q=80" },
-  { id: "tacos", title: "Tacos", image: "https://images.unsplash.com/photo-1551504734-5ee1c4a1479b?auto=format&fit=crop&w=1200&q=80" },
-  { id: "pasta", title: "Pasta", image: "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=80" }
-];
-
 export default function Home() {
+  const [game, setGame] = useState<GameData | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [round, setRound] = useState(0);
-  const [ranking, setRanking] = useState<(Item | null)[]>(Array(5).fill(null));
+  const [ranking, setRanking] = useState<(Item | null)[]>([]);
   const [status, setStatus] = useState("");
   const [sharing, setSharing] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
 
   useEffect(() => {
-    window.Telegram?.WebApp.ready();
-    window.Telegram?.WebApp.expand();
+    const webApp = window.Telegram?.WebApp;
+    webApp?.ready();
+    webApp?.expand();
+    webApp?.setHeaderColor?.("#0b0f17");
+    webApp?.setBackgroundColor?.("#0b0f17");
     setChatId(new URLSearchParams(window.location.search).get("chat_id"));
+
+    fetch("/game-data.json", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Konfiguration konnte nicht geladen werden.");
+        return response.json() as Promise<GameData>;
+      })
+      .then((data) => {
+        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 10) {
+          throw new Error("In game-data.json müssen 2 bis 10 Einträge stehen.");
+        }
+        const valid = data.items.every((item) => item.id && item.title && item.image);
+        if (!valid) throw new Error("Jeder Eintrag braucht id, title und image.");
+        setGame(data);
+        setRanking(Array(data.items.length).fill(null));
+      })
+      .catch((error) => setLoadError(error instanceof Error ? error.message : "Unbekannter Ladefehler"));
   }, []);
 
-  const done = round >= items.length;
+  const items = game?.items ?? [];
+  const done = game !== null && round >= items.length;
   const current = items[round];
+  const gridStyle = useMemo(() => ({ gridTemplateColumns: `repeat(${Math.min(items.length, 5)}, 1fr)` }), [items.length]);
 
   function choose(position: number) {
     if (!current || ranking[position]) return;
@@ -71,16 +89,25 @@ export default function Home() {
     }
   }
 
+  if (loadError) {
+    return <main><section className="card error"><div className="content"><h1>Konfigurationsfehler</h1><p>{loadError}</p></div></section></main>;
+  }
+
+  if (!game) {
+    return <main><section className="card loading"><div className="content"><p>Lade Spiel …</p></div></section></main>;
+  }
+
   return (
     <main>
       {!done ? (
         <section className="card">
           <img className="hero" src={current.image} alt={current.title} />
           <div className="content">
+            <p className="brand">{game.title ?? "Blind Ranking"}</p>
             <p className="kicker">Runde {round + 1} von {items.length}</p>
             <h1>{current.title}</h1>
-            <p>Wähle einen freien Platz. Deine Entscheidung ist endgültig.</p>
-            <div className="slots">
+            <p className="muted">{game.subtitle ?? "Wähle einen freien Platz. Deine Entscheidung ist endgültig."}</p>
+            <div className="slots" style={gridStyle}>
               {ranking.map((value, index) => (
                 <button className="slot" key={index} disabled={Boolean(value)} onClick={() => choose(index)}>
                   {index + 1}
@@ -92,6 +119,7 @@ export default function Home() {
       ) : (
         <section className="card">
           <div className="content">
+            <p className="brand">{game.title ?? "Blind Ranking"}</p>
             <p className="kicker">Fertig</p>
             <h1>Dein Blind Ranking</h1>
             <div className="ranking">
