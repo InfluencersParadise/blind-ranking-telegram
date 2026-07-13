@@ -123,6 +123,41 @@ async function normalizePositions(categoryId: string) {
   }
 }
 
+
+async function sendCommands(token: string, chatId: string | number, isAdmin: boolean) {
+  const adminSection = isAdmin
+    ? "\n\n<b>🛠 Verwaltung</b>\n" +
+      "<code>/neuekategorie Name</code> – neue Kategorie anlegen\n" +
+      "<code>/kategorien</code> – Kategorien mit Buttons verwalten\n" +
+      "<code>/bearbeiten Kategorie</code> – Kategorie direkt öffnen\n" +
+      "<code>/loeschen Kategorie</code> – Kategorie löschen (mit Bestätigung)\n" +
+      "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
+      "<code>/abbrechen</code> – aktuelle Eingabe abbrechen\n\n" +
+      "<b>🖼 Bilder</b>\n" +
+      "Sende ein Bild im privaten Chat. Den Namen kannst du direkt als Bildunterschrift mitsenden."
+    : "";
+
+  const keyboard = isAdmin
+    ? [
+        [{ text: "🎮 Spiel starten", callback_data: "menuplay:x" }],
+        [{ text: "➕ Neue Kategorie", callback_data: "menunew:x" }, { text: "📂 Kategorien", callback_data: "menucats:x" }],
+        [{ text: "❓ Hilfe", callback_data: "menuhelp:x" }]
+      ]
+    : [[{ text: "🎮 Spiel starten", callback_data: "menuplay:x" }]];
+
+  await send(
+    token,
+    chatId,
+    "<b>🤖 Blind Ranking – Befehle</b>\n\n" +
+      "<b>🎮 Spiel</b>\n" +
+      "<code>/blindranking</code> – aktive Kategorie starten\n" +
+      "<code>/blindranking Kategorie</code> – bestimmte Kategorie starten\n" +
+      "<code>/commands</code> – diese Übersicht anzeigen" +
+      adminSection,
+    { reply_markup: { inline_keyboard: keyboard } }
+  );
+}
+
 async function categoryMenu(token: string, chatId: string | number) {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
@@ -186,6 +221,23 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
   const supabase = getSupabaseAdmin();
   await answerCallback(token, callback.id);
 
+  if (action === "menuhelp") return sendCommands(token, chatId, true);
+  if (action === "menucats") return categoryMenu(token, chatId);
+  if (action === "menunew") {
+    await setSession(adminId, { category_id: null, mode: "awaiting_new_category_name", pending_file_id: null, pending_item_id: null });
+    await send(token, chatId, "Sende jetzt den Namen der neuen Kategorie.");
+    return;
+  }
+  if (action === "menuplay") {
+    const { data: setting } = await supabase.from("app_settings").select("active_category_id").eq("id", 1).maybeSingle();
+    if (!setting?.active_category_id) return send(token, chatId, "Noch keine aktive Kategorie vorhanden.");
+    const bot = await telegramApi(token, "getMe", {});
+    const deepLink = `https://t.me/${bot.username}?start=group_${chatId}_${setting.active_category_id}`;
+    await send(token, chatId, "🎮 Aktives Blind Ranking öffnen:", {
+      reply_markup: { inline_keyboard: [[{ text: "🎮 Spiel öffnen", url: deepLink }]] }
+    });
+    return;
+  }
   if (action === "cat") return showCategoryActions(token, chatId, id);
   if (action === "activate") {
     await supabase.from("app_settings").upsert({ id: 1, active_category_id: id });
@@ -289,16 +341,14 @@ export async function POST(request: NextRequest) {
     const command = isCommand ? text.split(/\s+/)[0].split("@")[0].toLowerCase() : "";
     const supabase = getSupabaseAdmin();
 
+    if (["/commands", "/help", "/hilfe"].includes(command)) {
+      await sendCommands(token, chatId, isPrivate && userId === adminId);
+      return NextResponse.json({ ok: true });
+    }
+
     if (isPrivate && userId === adminId) {
-      if (["/hilfe", "/admin", "/start"].includes(command) && !text.includes("group_")) {
-        await send(token, chatId,
-          "<b>Blind Ranking Admin</b>\n\n" +
-          "<code>/neuekategorie Name</code> – Kategorie erstellen\n" +
-          "<code>/kategorien</code> – Kategorien verwalten\n" +
-          "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
-          "<code>/abbrechen</code> – aktuelle Eingabe abbrechen\n\n" +
-          "Tipp: Sende den Namen direkt als Bildunterschrift, dann wird das Bild sofort gespeichert."
-        );
+      if (["/admin", "/start"].includes(command) && !text.includes("group_")) {
+        await sendCommands(token, chatId, true);
         return NextResponse.json({ ok: true });
       }
 
@@ -323,6 +373,38 @@ export async function POST(request: NextRequest) {
 
       if (command === "/kategorien") {
         await categoryMenu(token, chatId);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (command === "/bearbeiten") {
+        const name = commandArg(text);
+        if (!name) {
+          await categoryMenu(token, chatId);
+          return NextResponse.json({ ok: true });
+        }
+        const category = await findCategoryByName(name);
+        if (!category) {
+          await send(token, chatId, "Kategorie nicht gefunden. Nutze <code>/kategorien</code>.");
+          return NextResponse.json({ ok: true });
+        }
+        await showCategoryActions(token, chatId, category.id);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (["/loeschen", "/löschen"].includes(command)) {
+        const name = commandArg(text);
+        if (!name) {
+          await send(token, chatId, "Bitte so senden: <code>/loeschen Kategoriename</code>");
+          return NextResponse.json({ ok: true });
+        }
+        const category = await findCategoryByName(name);
+        if (!category) {
+          await send(token, chatId, "Kategorie nicht gefunden.");
+          return NextResponse.json({ ok: true });
+        }
+        await send(token, chatId, `Kategorie <b>${escapeHtml(category.name)}</b> wirklich endgültig löschen?`, {
+          reply_markup: { inline_keyboard: [[{ text: "Ja, löschen", callback_data: `delcat:${category.id}` }, { text: "Abbrechen", callback_data: "noop:x" }]] }
+        });
         return NextResponse.json({ ok: true });
       }
 
@@ -395,6 +477,19 @@ export async function POST(request: NextRequest) {
       }
 
       if (text && !isCommand && session) {
+        if (session.mode === "awaiting_new_category_name") {
+          const { data: category, error } = await supabase.from("categories").insert({ name: text, created_by: userId }).select("id,name").single();
+          if (error) {
+            if (String(error.message).toLowerCase().includes("duplicate")) {
+              await send(token, chatId, "Eine Kategorie mit diesem Namen existiert bereits.");
+              return NextResponse.json({ ok: true });
+            }
+            throw error;
+          }
+          await setSession(userId, { category_id: category.id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+          await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt. Sende jetzt das erste Bild.`);
+          return NextResponse.json({ ok: true });
+        }
         if (session.mode === "awaiting_title" && session.pending_file_id && session.category_id) {
           const count = await categoryCount(session.category_id);
           if (count >= 10) {

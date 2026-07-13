@@ -82,7 +82,7 @@ export default function Home() {
           initData: window.Telegram?.WebApp.initData ?? "",
           chatId,
           categoryId: game?.categoryId ?? categoryId,
-          ranking: ranking.map((item, index) => ({ position: index + 1, title: item?.title ?? "–" }))
+          ranking: ranking.map((item, index) => ({ position: index + 1, itemId: item?.id ?? "", title: item?.title ?? "–" }))
         })
       });
       const data = await response.json();

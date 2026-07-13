@@ -109,3 +109,22 @@ Bestimmte Kategorie starten:
 ## Sicherheit
 
 Bot-Token, Webhook-Secret und Supabase-Secret-Key niemals in GitHub, Screenshots oder Chats veröffentlichen. Bereits veröffentlichte Bot-Tokens müssen bei BotFather mit `/revoke` ersetzt werden.
+
+## Änderung: vollständige Bilder und Ranking-Album
+
+- Die Mini App zeigt hochformatige und querformatige Bilder vollständig mit `object-fit: contain` an.
+- Beim Teilen sendet der Bot alle Ranking-Bilder als Telegram-Album in der gewählten Reihenfolge.
+
+## Befehlsübersicht
+
+Mit `/commands` zeigt der Bot alle verfügbaren Befehle und ein Button-Menü an.
+
+- `/blindranking` – aktive Kategorie starten
+- `/blindranking Kategorie` – bestimmte Kategorie starten
+- `/neuekategorie Name` – Kategorie erstellen
+- `/kategorien` – Kategorien verwalten
+- `/bearbeiten Kategorie` – Kategorie direkt öffnen
+- `/loeschen Kategorie` – Kategorie mit Sicherheitsabfrage löschen
+- `/fertig` – Bearbeitung abschließen und aktivieren
+- `/abbrechen` – aktuelle Eingabe abbrechen
+- `/commands` – Hilfe und Schnellzugriff anzeigen
