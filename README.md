@@ -50,3 +50,23 @@ Eigenes Kontingent anzeigen:
 ## Vorhandene Creator
 
 Bereits gespeicherte Creator werden durch das SQL-Update auf **unbegrenzt** gesetzt. Ihre bisher erstellten Kategorien werden als Verbrauch erfasst.
+
+## Eigene Telegram-ID anzeigen
+
+Jeder Nutzer kann im privaten Chat oder in einer Gruppe Folgendes senden:
+
+```text
+/id
+```
+
+Der Bot zeigt die persönliche numerische Telegram-ID, den Benutzernamen und die aktuelle Rolle an. Diese ID kann an einen Owner geschickt werden, damit dieser das Konto direkt als Creator freigibt. Die Aliase `/meineid` und `/myid` funktionieren ebenfalls.
+
+
+## Creator direkt per Telegram-ID freigeben
+
+1. Der Nutzer sendet dem Bot `/id` und schickt dem Owner die angezeigte Nummer.
+2. Der Owner öffnet im privaten Bot-Chat `/rollen`.
+3. `➕ Creator per ID genehmigen` antippen.
+4. Zuerst die numerische Telegram-ID senden.
+5. Danach das Kontingent auswählen: 1, 3, 5, 10 oder unbegrenzt.
+6. Erst mit der Kontingentauswahl wird die Freigabe gespeichert.

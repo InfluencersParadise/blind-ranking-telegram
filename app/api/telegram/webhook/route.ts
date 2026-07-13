@@ -279,7 +279,8 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
       "<code>/setumfragethema</code> – aktuelles Thema für Umfrage-Links festlegen\n" +
       "<code>/setergebnisthema</code> – aktuelles Thema für Ergebnisse festlegen\n" +
       "<code>/themenreset</code> – beide Zielthemen zurücksetzen\n" +
-      "<code>/aktivieren TOKEN</code> – einmaligen Zugangstoken einlösen\n" +
+      "<code>/id</code> – deine persönliche Telegram-ID anzeigen\n" +
+      "<code>/aktivieren TOKEN</code> – einmaligen Creator-Token einlösen\n" +
       (role === "owner" ? "<code>/rollen</code> – Rollen- und Tokenverwaltung öffnen\n" : "") +
       "<code>/commands</code> – diese Übersicht anzeigen" +
       adminSection,
@@ -420,14 +421,19 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
   }
   if (action === "approvemenu") {
     if (role !== "owner") return send(token, chatId, "Nur Owner.");
-    return send(token, chatId, "<b>➕ Creator per ID genehmigen</b>\n\nKontingent auswählen:", { reply_markup: { inline_keyboard: quotaButtons("approvequota") } });
+    await setSession(ownerId, { category_id: null, mode: "awaiting_authorize_creator_id", pending_file_id: null, pending_item_id: null });
+    return send(token, chatId, "<b>➕ Creator per ID genehmigen</b>\n\nSende jetzt zuerst die numerische Telegram-ID des Nutzers.");
   }
-  if (action === "approvequota") {
+  if (action === "approveuser") {
     if (role !== "owner") return send(token, chatId, "Nur Owner.");
-    const categoryLimit = id === "u" ? null : Number(id);
-    if (id !== "u" && categoryLimit === null || ![1, 3, 5, 10].includes(categoryLimit as number)) return send(token, chatId, "Ungültiges Kontingent.");
-    await setSession(ownerId, { category_id: null, mode: `awaiting_authorize_creator_${id}`, pending_file_id: null, pending_item_id: null });
-    return send(token, chatId, `Sende jetzt die numerische Telegram-ID. Kontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
+    const [target, quotaCode] = id.split("_", 2);
+    const targetId = Number(target);
+    const categoryLimit = quotaCode === "u" ? null : Number(quotaCode);
+    if (!Number.isSafeInteger(targetId) || targetId <= 0 || (quotaCode !== "u" && ![1, 3, 5, 10].includes(categoryLimit as number))) {
+      return send(token, chatId, "Ungültige Freigabeauswahl.");
+    }
+    await saveCreator({ id: targetId }, ownerId, categoryLimit);
+    return send(token, chatId, `✅ <code>${targetId}</code> wurde als <b>Creator</b> genehmigt. Kontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
   }
   if (action === "quotaedit") {
     if (role !== "owner") return send(token, chatId, "Nur Owner.");
@@ -783,6 +789,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    if (["/id", "/meineid", "/myid"].includes(command)) {
+      const username = message.from.username ? `@${escapeHtml(message.from.username)}` : "kein öffentlicher Benutzername";
+      await send(
+        token,
+        chatId,
+        `<b>🆔 Deine Telegram-ID</b>\n\n<code>${userId}</code>\n\nBenutzername: ${escapeHtml(username)}\nRolle: <b>${role === "owner" ? "Owner" : role === "creator" ? "Creator" : "Player"}</b>\n\nDu kannst diese ID einem Owner schicken, damit er dich direkt als Creator freigibt.`,
+        isPrivate ? undefined : topicExtra(message.message_thread_id)
+      );
+      return NextResponse.json({ ok: true });
+    }
+
     if (["/rollen", "/roles"].includes(command)) {
       if (!isPrivate || role !== "owner") await send(token, chatId, "Dieses Menü ist nur für Owner im privaten Bot-Chat verfügbar.");
       else await showRoleMenu(token, chatId);
@@ -982,14 +999,30 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
 
       const session = await getSession(userId);
 
-      if (role === "owner" && text && !isCommand && session?.mode.startsWith("awaiting_authorize_creator_")) {
+      if (role === "owner" && text && !isCommand && session?.mode === "awaiting_authorize_creator_id") {
         const targetId = Number(text.trim());
-        const quotaCode = session.mode.split("_").pop() ?? "u";
-        const categoryLimit = quotaCode === "u" ? null : Number(quotaCode);
-        if (!Number.isSafeInteger(targetId) || targetId <= 0) { await send(token, chatId, "Ungültige Telegram-ID. Sende nur die numerische ID."); return NextResponse.json({ ok: true }); }
-        await saveCreator({ id: targetId }, ownerId, categoryLimit);
+        if (!Number.isSafeInteger(targetId) || targetId <= 0) {
+          await send(token, chatId, "Ungültige Telegram-ID. Sende nur die numerische ID, zum Beispiel <code>123456789</code>.");
+          return NextResponse.json({ ok: true });
+        }
+        const { data: existingCreator } = await supabase
+          .from("bot_users")
+          .select("user_id,role,active,category_limit,categories_used")
+          .eq("user_id", targetId)
+          .maybeSingle();
+        if (existingCreator?.role === "creator" && existingCreator.active) {
+          await supabase.from("admin_sessions").delete().eq("user_id", userId);
+          await send(token, chatId, `Dieser Nutzer ist bereits Creator. Aktuell: <b>${quotaLabel(existingCreator.category_limit, Number(existingCreator.categories_used ?? 0))}</b>. Nutze „Kontingent ändern“ im Rollenmenü.`);
+          return NextResponse.json({ ok: true });
+        }
         await supabase.from("admin_sessions").delete().eq("user_id", userId);
-        await send(token, chatId, `✅ <code>${targetId}</code> wurde als <b>Creator</b> genehmigt. Kontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
+        const rows = quotaButtons("placeholder").map((row) => row.map((button) => {
+          const quotaCode = button.callback_data.split(":", 2)[1];
+          return { ...button, callback_data: `approveuser:${targetId}_${quotaCode}` };
+        }));
+        await send(token, chatId, `<b>Creator freigeben</b>\n\nTelegram-ID: <code>${targetId}</code>\n\nWie viele Kategorien darf dieser Creator insgesamt erstellen?`, {
+          reply_markup: { inline_keyboard: rows }
+        });
         return NextResponse.json({ ok: true });
       }
       if (role === "owner" && text && !isCommand && session?.mode === "awaiting_quota_user") {
