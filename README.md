@@ -1,144 +1,111 @@
-# Blind Ranking – Telegram-Upload + Dark Mode
+# Blind Ranking Telegram – Version 2
 
-Diese Version erlaubt dir, Kategorien, Bilder und Namen vollständig im privaten Chat mit deinem Telegram-Bot zu verwalten. GitHub musst du danach für neue Spielinhalte nicht mehr öffnen.
+Diese Version verwaltet Kategorien und Bilder vollständig im privaten Telegram-Chat mit dem Bot. Die Mini App läuft dauerhaft im Dark Mode.
 
-## So funktioniert die Verwaltung
+## Wichtige Verbesserung
 
-Im privaten Chat mit dem Bot:
+In der früheren Version wurde eine normale Namensnachricht versehentlich wie ein Befehl behandelt. Dadurch blieb der Bot nach der Frage „Wie heißt dieses Bild?“ stehen. Version 2 behebt diesen Fehler.
+
+## Funktionen
+
+- Kategorien über Telegram erstellen
+- Bilder mit oder ohne Bildunterschrift hochladen
+- Kategorien aktivieren, umbenennen und löschen
+- Bilder umbenennen, ersetzen und löschen
+- 2 bis 10 Bilder pro Kategorie
+- Auswahl einer bestimmten Kategorie in der Gruppe
+- Dark-Mode-Mini-App
+- Ergebnis wird wieder in die ursprüngliche Gruppe gesendet
+
+## Upgrade deines vorhandenen Projekts
+
+1. ZIP entpacken.
+2. Den gesamten Inhalt in dein bestehendes GitHub-Repository hochladen und vorhandene Dateien ersetzen.
+3. `Commit changes` anklicken.
+4. Vercel erstellt automatisch ein neues Deployment.
+5. Falls nicht: Vercel → Deployments → Redeploy. Build Cache deaktiviert lassen.
+6. Warten, bis der Status `Ready` lautet.
+
+Deine bestehenden Vercel-Variablen bleiben unverändert:
+
+- `TELEGRAM_BOT_TOKEN`
+- `NEXT_PUBLIC_APP_URL`
+- `WEBHOOK_SECRET`
+- `ADMIN_TELEGRAM_USER_ID`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+## Supabase aktualisieren
+
+Öffne Supabase → SQL Editor. Kopiere den vollständigen Inhalt von `supabase.sql` hinein und klicke auf `Run`.
+
+Das Skript ist wiederholbar und ergänzt nur die neuen Spalten. Vorhandene Kategorien und Bilder bleiben erhalten.
+
+## Bedienung im privaten Bot-Chat
+
+### Kategorie erstellen
 
 ```text
-/neuekategorie Fußballer
+/neuekategorie Influencer
 ```
 
-Danach:
+Danach ein Bild senden. Es gibt zwei Varianten:
 
-1. Bild an den Bot senden.
-2. Bot fragt nach dem Namen.
-3. Namen senden, z. B. `Lionel Messi`.
-4. Weitere Bilder senden.
-5. Nach 2 bis 10 Bildern `/fertig` senden.
+1. Bild ohne Bildunterschrift senden → Bot fragt nach dem Namen.
+2. Bild mit Bildunterschrift senden → die Bildunterschrift wird direkt als Name gespeichert.
 
-Schneller geht es, wenn du den Namen direkt als **Bildunterschrift** mitsendest. Dann wird das Bild sofort gespeichert.
+Nach mindestens zwei Bildern:
 
-In der Gruppe:
+```text
+/fertig
+```
+
+### Kategorien verwalten
+
+```text
+/kategorien
+```
+
+Danach erscheinen Schaltflächen für:
+
+- Aktivieren
+- Bild hinzufügen
+- Bilder verwalten
+- Kategorie umbenennen
+- Kategorie löschen
+
+Unter „Bilder verwalten“ kann jeder Eintrag umbenannt, ersetzt oder gelöscht werden.
+
+### Aktuelle Eingabe abbrechen
+
+```text
+/abbrechen
+```
+
+## Spiel in der Gruppe
+
+Aktive Kategorie starten:
 
 ```text
 /blindranking
 ```
 
-Für eine bestimmte vorhandene Kategorie:
+Bestimmte Kategorie starten:
 
 ```text
-/blindranking Fußballer
+/blindranking Influencer
 ```
 
-## Admin-Befehle
+## Test nach dem Deployment
 
-```text
-/admin
-/neuekategorie Kategoriename
-/fertig
-/kategorien
-/aktiv Kategoriename
-/löschen Kategoriename
-```
+1. Im privaten Chat `/neuekategorie Test` senden.
+2. Ein Bild senden.
+3. Einen Namen senden.
+4. Der Bot muss jetzt mit `hinzugefügt` antworten.
+5. Zweites Bild hinzufügen.
+6. `/fertig` senden.
+7. In der Gruppe `/blindranking` senden.
 
-Nur die Telegram-Nutzer-ID aus `ADMIN_TELEGRAM_USER_ID` darf Kategorien verwalten.
+## Sicherheit
 
----
-
-# Einmalige Einrichtung
-
-## 1. Kostenloses Supabase-Projekt anlegen
-
-1. Öffne `supabase.com` und melde dich an.
-2. Klicke auf **New project**.
-3. Vergib einen Projektnamen und ein Datenbankpasswort.
-4. Warte, bis das Projekt bereit ist.
-
-## 2. Datenbank und Bildspeicher einrichten
-
-1. Öffne in Supabase links **SQL Editor**.
-2. Klicke auf **New query**.
-3. Öffne aus diesem Projekt die Datei `supabase.sql`.
-4. Kopiere ihren gesamten Inhalt in den SQL Editor.
-5. Klicke auf **Run**.
-
-Das Skript erstellt:
-
-- Kategorien
-- Bildeinträge
-- Admin-Zwischenstände
-- aktive Kategorie
-- öffentlichen Storage-Bucket `blind-ranking-images`
-
-## 3. Supabase-Schlüssel kopieren
-
-In Supabase:
-
-1. **Project Settings** öffnen.
-2. **API** bzw. **Data API** öffnen.
-3. Kopiere die **Project URL**.
-4. Kopiere den **service_role key**.
-
-Achtung: Der `service_role`-Schlüssel ist geheim. Nicht in GitHub, Telegram oder Screenshots veröffentlichen.
-
-## 4. Eigene Telegram-Nutzer-ID herausfinden
-
-Schreibe in Telegram beispielsweise dem Bot `@userinfobot` oder einem vergleichbaren ID-Bot. Kopiere deine numerische Telegram User ID.
-
-Diese ID ist nicht dein Nutzername und nicht die Gruppen-ID.
-
-## 5. Neue Variablen in Vercel ergänzen
-
-In Vercel unter **Environment Variables** zusätzlich zu deinen bisherigen drei Variablen anlegen:
-
-```text
-ADMIN_TELEGRAM_USER_ID = deine numerische Telegram-Nutzer-ID
-SUPABASE_URL = deine Supabase Project URL
-SUPABASE_SERVICE_ROLE_KEY = dein geheimer service_role key
-```
-
-Damit sind insgesamt diese sechs Variablen vorhanden:
-
-```text
-TELEGRAM_BOT_TOKEN
-NEXT_PUBLIC_APP_URL
-WEBHOOK_SECRET
-ADMIN_TELEGRAM_USER_ID
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-```
-
-Für alle Variablen mindestens **Production** aktivieren. Danach ein neues **Redeploy** ohne alten Build Cache starten.
-
-## 6. Projekt aktualisieren
-
-1. Lade alle Dateien dieses Projekts in dein bestehendes GitHub-Repository hoch.
-2. Vorhandene Dateien ersetzen.
-3. Änderungen committen.
-4. Vercel startet automatisch ein Deployment.
-5. Warten, bis der Status **Ready** ist.
-
-Der bestehende Telegram-Webhook und die BotFather-Domain müssen nicht neu gesetzt werden, solange Domain und Bot gleich bleiben.
-
----
-
-# Erster Test
-
-1. Öffne den privaten Chat mit deinem Bot.
-2. Sende `/admin`.
-3. Sende `/neuekategorie Test`.
-4. Sende mindestens zwei Bilder und jeweils den Namen.
-5. Sende `/fertig`.
-6. Öffne deine Telegram-Gruppe.
-7. Sende `/blindranking`.
-
-## Wichtige Hinweise
-
-- Erlaubt sind 2 bis 10 Bilder pro Kategorie.
-- Die Mini App zeigt die Bilder in zufälliger Reihenfolge.
-- Die Website bleibt dauerhaft im Dark Mode.
-- Bilder werden aus Telegram heruntergeladen und anschließend in Supabase Storage gespeichert.
-- Das Frontend erhält niemals deinen Telegram-Bot-Token oder den Supabase-Service-Key.
-- Bei `/löschen Kategoriename` werden die Datenbankeinträge gelöscht. Die zugehörigen Storage-Dateien werden in dieser MVP-Version noch nicht automatisch entfernt.
+Bot-Token, Webhook-Secret und Supabase-Secret-Key niemals in GitHub, Screenshots oder Chats veröffentlichen. Bereits veröffentlichte Bot-Tokens müssen bei BotFather mit `/revoke` ersetzt werden.

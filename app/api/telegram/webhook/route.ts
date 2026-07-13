@@ -3,7 +3,7 @@ import { getSupabaseAdmin, IMAGE_BUCKET } from "../../../../lib/supabase";
 
 type TelegramChat = { id: number; type: "private" | "group" | "supergroup" | "channel" };
 type TelegramUser = { id: number; username?: string; first_name?: string };
-type TelegramPhoto = { file_id: string; file_size?: number; width: number; height: number };
+type TelegramPhoto = { file_id: string; width: number; height: number };
 type TelegramMessage = {
   message_id: number;
   text?: string;
@@ -11,6 +11,21 @@ type TelegramMessage = {
   chat?: TelegramChat;
   from?: TelegramUser;
   photo?: TelegramPhoto[];
+};
+type CallbackQuery = {
+  id: string;
+  from: TelegramUser;
+  data?: string;
+  message?: TelegramMessage;
+};
+type TelegramUpdate = { message?: TelegramMessage; callback_query?: CallbackQuery };
+
+type CategoryRow = { id: string; name: string };
+type SessionRow = {
+  category_id: string | null;
+  mode: string;
+  pending_file_id: string | null;
+  pending_item_id: string | null;
 };
 
 async function telegramApi(token: string, method: string, payload: unknown) {
@@ -28,8 +43,17 @@ async function send(token: string, chatId: string | number, text: string, extra:
   return telegramApi(token, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...extra });
 }
 
+async function answerCallback(token: string, callbackQueryId: string, text?: string) {
+  return telegramApi(token, "answerCallbackQuery", { callback_query_id: callbackQueryId, text });
+}
+
 function escapeHtml(value: string) {
   return value.replace(/[&<>]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[char] ?? char));
+}
+
+function commandArg(text: string) {
+  const firstSpace = text.indexOf(" ");
+  return firstSpace === -1 ? "" : text.slice(firstSpace + 1).trim();
 }
 
 async function uploadTelegramPhoto(token: string, fileId: string, userId: number) {
@@ -46,14 +70,192 @@ async function uploadTelegramPhoto(token: string, fileId: string, userId: number
     upsert: false
   });
   if (error) throw error;
-  return supabase.storage.from(IMAGE_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+  const imageUrl = supabase.storage.from(IMAGE_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+  return { imageUrl, objectPath };
 }
 
-async function findCategoryByName(name: string) {
+async function findCategoryByName(name: string): Promise<CategoryRow | null> {
+  if (!name.trim()) return null;
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.from("categories").select("id,name").ilike("name", name.trim()).limit(1).maybeSingle();
   if (error) throw error;
-  return data;
+  return data as CategoryRow | null;
+}
+
+async function getSession(userId: number): Promise<SessionRow | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("admin_sessions")
+    .select("category_id,mode,pending_file_id,pending_item_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as SessionRow | null;
+}
+
+async function setSession(userId: number, values: Partial<SessionRow> & { category_id?: string | null }) {
+  const supabase = getSupabaseAdmin();
+  const existing = await getSession(userId);
+  const payload = {
+    user_id: userId,
+    category_id: values.category_id ?? existing?.category_id ?? null,
+    mode: values.mode ?? existing?.mode ?? "awaiting_photo",
+    pending_file_id: values.pending_file_id !== undefined ? values.pending_file_id : existing?.pending_file_id ?? null,
+    pending_item_id: values.pending_item_id !== undefined ? values.pending_item_id : existing?.pending_item_id ?? null,
+    updated_at: new Date().toISOString()
+  };
+  const { error } = await supabase.from("admin_sessions").upsert(payload);
+  if (error) throw error;
+}
+
+async function categoryCount(categoryId: string) {
+  const { count, error } = await getSupabaseAdmin().from("items").select("id", { count: "exact", head: true }).eq("category_id", categoryId);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function normalizePositions(categoryId: string) {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.from("items").select("id").eq("category_id", categoryId).order("position", { ascending: true });
+  if (error) throw error;
+  for (let i = 0; i < (data ?? []).length; i += 1) {
+    const { error: updateError } = await supabase.from("items").update({ position: i + 1 }).eq("id", data![i].id);
+    if (updateError) throw updateError;
+  }
+}
+
+async function categoryMenu(token: string, chatId: string | number) {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
+  if (error) throw error;
+  if (!data?.length) {
+    await send(token, chatId, "Noch keine Kategorien vorhanden. Erstelle eine mit <code>/neuekategorie Name</code>.");
+    return;
+  }
+  const buttons = data.map((category: any) => [{
+    text: `${category.name} (${category.items?.[0]?.count ?? 0})`,
+    callback_data: `cat:${category.id}`
+  }]);
+  await send(token, chatId, "<b>Kategorien verwalten</b>\n\nTippe eine Kategorie an:", {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showCategoryActions(token: string, chatId: string | number, categoryId: string) {
+  const supabase = getSupabaseAdmin();
+  const { data: category, error } = await supabase.from("categories").select("id,name").eq("id", categoryId).maybeSingle();
+  if (error) throw error;
+  if (!category) {
+    await send(token, chatId, "Kategorie nicht gefunden.");
+    return;
+  }
+  const count = await categoryCount(categoryId);
+  await send(token, chatId, `<b>${escapeHtml(category.name)}</b>\n${count} Bilder`, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✅ Aktivieren", callback_data: `activate:${categoryId}` }, { text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }],
+        [{ text: "🖼 Bilder verwalten", callback_data: `items:${categoryId}` }],
+        [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
+        [{ text: "🗑 Kategorie löschen", callback_data: `delcatask:${categoryId}` }]
+      ]
+    }
+  });
+}
+
+async function showItems(token: string, chatId: string | number, categoryId: string) {
+  const supabase = getSupabaseAdmin();
+  const { data: category } = await supabase.from("categories").select("name").eq("id", categoryId).maybeSingle();
+  const { data, error } = await supabase.from("items").select("id,title,position").eq("category_id", categoryId).order("position", { ascending: true });
+  if (error) throw error;
+  if (!data?.length) {
+    await send(token, chatId, "Diese Kategorie enthält noch keine Bilder.");
+    return;
+  }
+  const buttons = data.map((item) => [{ text: `${item.position}. ${item.title}`, callback_data: `item:${item.id}` }]);
+  await send(token, chatId, `<b>Bilder: ${escapeHtml(category?.name ?? "Kategorie")}</b>\n\nTippe einen Eintrag an:`, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function handleCallback(token: string, callback: CallbackQuery, adminId: number) {
+  if (callback.from.id !== adminId || !callback.message?.chat?.id || !callback.data) {
+    await answerCallback(token, callback.id, "Nicht erlaubt");
+    return;
+  }
+  const chatId = String(callback.message.chat.id);
+  const [action, id] = callback.data.split(":", 2);
+  const supabase = getSupabaseAdmin();
+  await answerCallback(token, callback.id);
+
+  if (action === "cat") return showCategoryActions(token, chatId, id);
+  if (action === "activate") {
+    await supabase.from("app_settings").upsert({ id: 1, active_category_id: id });
+    await send(token, chatId, "✅ Kategorie wurde aktiviert.");
+    return;
+  }
+  if (action === "add") {
+    await setSession(adminId, { category_id: id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+    await send(token, chatId, "Sende jetzt ein neues Bild. Du kannst den Namen direkt als Bildunterschrift mitsenden.");
+    return;
+  }
+  if (action === "items") return showItems(token, chatId, id);
+  if (action === "renamecat") {
+    await setSession(adminId, { category_id: id, mode: "awaiting_category_name", pending_file_id: null, pending_item_id: null });
+    await send(token, chatId, "Sende jetzt den neuen Namen der Kategorie.");
+    return;
+  }
+  if (action === "delcatask") {
+    await send(token, chatId, "Kategorie wirklich endgültig löschen?", {
+      reply_markup: { inline_keyboard: [[{ text: "Ja, löschen", callback_data: `delcat:${id}` }, { text: "Abbrechen", callback_data: "noop:x" }]] }
+    });
+    return;
+  }
+  if (action === "delcat") {
+    await supabase.from("categories").delete().eq("id", id);
+    await send(token, chatId, "🗑 Kategorie gelöscht.");
+    return;
+  }
+  if (action === "item") {
+    const { data: item } = await supabase.from("items").select("id,title,category_id").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    await send(token, chatId, `<b>${escapeHtml(item.title)}</b>`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✏️ Namen ändern", callback_data: `renameitem:${item.id}` }, { text: "📷 Bild ersetzen", callback_data: `replace:${item.id}` }],
+          [{ text: "🗑 Eintrag löschen", callback_data: `delitemask:${item.id}` }]
+        ]
+      }
+    });
+    return;
+  }
+  if (action === "renameitem") {
+    const { data: item } = await supabase.from("items").select("category_id").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    await setSession(adminId, { category_id: item.category_id, mode: "awaiting_item_name", pending_item_id: id, pending_file_id: null });
+    await send(token, chatId, "Sende jetzt den neuen Namen.");
+    return;
+  }
+  if (action === "replace") {
+    const { data: item } = await supabase.from("items").select("category_id").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    await setSession(adminId, { category_id: item.category_id, mode: "awaiting_replacement_photo", pending_item_id: id, pending_file_id: null });
+    await send(token, chatId, "Sende jetzt das neue Bild.");
+    return;
+  }
+  if (action === "delitemask") {
+    await send(token, chatId, "Eintrag wirklich löschen?", {
+      reply_markup: { inline_keyboard: [[{ text: "Ja, löschen", callback_data: `delitem:${id}` }, { text: "Abbrechen", callback_data: "noop:x" }]] }
+    });
+    return;
+  }
+  if (action === "delitem") {
+    const { data: item } = await supabase.from("items").select("category_id,storage_path").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    await supabase.from("items").delete().eq("id", id);
+    if (item.storage_path) await supabase.storage.from(IMAGE_BUCKET).remove([item.storage_path]);
+    await normalizePositions(item.category_id);
+    await send(token, chatId, "🗑 Eintrag gelöscht.");
+    return;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -70,128 +272,172 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const update = await request.json();
-    const message: TelegramMessage | undefined = update.message;
+    const update = (await request.json()) as TelegramUpdate;
+    if (update.callback_query) {
+      await handleCallback(token, update.callback_query, adminId);
+      return NextResponse.json({ ok: true });
+    }
+
+    const message = update.message;
     if (!message?.chat?.id || !message.from?.id) return NextResponse.json({ ok: true });
 
     const chatId = String(message.chat.id);
     const userId = message.from.id;
     const isPrivate = message.chat.type === "private";
     const text = (message.text ?? "").trim();
-    const command = text ? text.split(/\s+/)[0].split("@")[0].toLowerCase() : "";
+    const isCommand = text.startsWith("/");
+    const command = isCommand ? text.split(/\s+/)[0].split("@")[0].toLowerCase() : "";
     const supabase = getSupabaseAdmin();
 
     if (isPrivate && userId === adminId) {
-      if (command === "/hilfe" || command === "/admin") {
-        await send(token, chatId, "<b>Admin-Befehle</b>\n\n/neuekategorie Name\nDann Bilder einzeln senden und jeweils danach den Namen schreiben.\n/fertig\n/kategorien\n/aktiv Kategoriename\n/löschen Kategoriename");
+      if (["/hilfe", "/admin", "/start"].includes(command) && !text.includes("group_")) {
+        await send(token, chatId,
+          "<b>Blind Ranking Admin</b>\n\n" +
+          "<code>/neuekategorie Name</code> – Kategorie erstellen\n" +
+          "<code>/kategorien</code> – Kategorien verwalten\n" +
+          "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
+          "<code>/abbrechen</code> – aktuelle Eingabe abbrechen\n\n" +
+          "Tipp: Sende den Namen direkt als Bildunterschrift, dann wird das Bild sofort gespeichert."
+        );
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/neuekategorie") {
-        const name = text.slice(text.indexOf(" ") + 1).trim();
-        if (!name || name === text) {
+        const name = commandArg(text);
+        if (!name) {
           await send(token, chatId, "Bitte so senden: <code>/neuekategorie Meine Kategorie</code>");
           return NextResponse.json({ ok: true });
         }
         const { data: category, error } = await supabase.from("categories").insert({ name, created_by: userId }).select("id,name").single();
-        if (error) throw error;
-        await supabase.from("admin_sessions").upsert({ user_id: userId, category_id: category.id, mode: "awaiting_photo", pending_file_id: null, updated_at: new Date().toISOString() });
-        await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt das erste Bild. Danach frage ich dich nach dem Namen.`);
+        if (error) {
+          if (String(error.message).toLowerCase().includes("duplicate")) {
+            await send(token, chatId, "Eine Kategorie mit diesem Namen existiert bereits.");
+            return NextResponse.json({ ok: true });
+          }
+          throw error;
+        }
+        await setSession(userId, { category_id: category.id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+        await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt das erste Bild. Danach frage ich nach dem Namen – oder du setzt den Namen direkt als Bildunterschrift.`);
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/kategorien") {
-        const { data, error } = await supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
-        if (error) throw error;
-        const rows = (data ?? []).map((c: any) => `• <b>${escapeHtml(c.name)}</b> (${c.items?.[0]?.count ?? 0} Bilder)`);
-        await send(token, chatId, rows.length ? `<b>Kategorien</b>\n\n${rows.join("\n")}` : "Noch keine Kategorien vorhanden.");
+        await categoryMenu(token, chatId);
         return NextResponse.json({ ok: true });
       }
 
-      if (command === "/aktiv") {
-        const name = text.slice(text.indexOf(" ") + 1).trim();
-        const category = await findCategoryByName(name);
-        if (!category) await send(token, chatId, "Kategorie nicht gefunden.");
-        else {
-          await supabase.from("app_settings").upsert({ id: 1, active_category_id: category.id });
-          await send(token, chatId, `✅ <b>${escapeHtml(category.name)}</b> ist jetzt aktiv.`);
-        }
-        return NextResponse.json({ ok: true });
-      }
-
-      if (command === "/löschen" || command === "/loeschen") {
-        const name = text.slice(text.indexOf(" ") + 1).trim();
-        const category = await findCategoryByName(name);
-        if (!category) await send(token, chatId, "Kategorie nicht gefunden.");
-        else {
-          await supabase.from("categories").delete().eq("id", category.id);
-          await send(token, chatId, `🗑️ <b>${escapeHtml(category.name)}</b> wurde gelöscht.`);
-        }
+      if (command === "/abbrechen") {
+        await supabase.from("admin_sessions").delete().eq("user_id", userId);
+        await send(token, chatId, "Aktuelle Bearbeitung wurde abgebrochen.");
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/fertig") {
-        const { data: session } = await supabase.from("admin_sessions").select("category_id").eq("user_id", userId).maybeSingle();
+        const session = await getSession(userId);
         if (!session?.category_id) {
           await send(token, chatId, "Keine Kategorie in Bearbeitung.");
           return NextResponse.json({ ok: true });
         }
-        const { count } = await supabase.from("items").select("id", { count: "exact", head: true }).eq("category_id", session.category_id);
-        if (!count || count < 2 || count > 10) {
-          await send(token, chatId, `Die Kategorie hat aktuell ${count ?? 0} Bilder. Erlaubt sind 2 bis 10.`);
+        const count = await categoryCount(session.category_id);
+        if (count < 2 || count > 10) {
+          await send(token, chatId, `Die Kategorie hat aktuell ${count} Bilder. Erlaubt sind 2 bis 10.`);
           return NextResponse.json({ ok: true });
         }
         await supabase.from("app_settings").upsert({ id: 1, active_category_id: session.category_id });
         await supabase.from("admin_sessions").delete().eq("user_id", userId);
-        await send(token, chatId, `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv. Starte sie in der Gruppe mit /blindranking.`);
+        await send(token, chatId, `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv. Starte sie in der Gruppe mit <code>/blindranking</code>.`);
         return NextResponse.json({ ok: true });
       }
 
-      const { data: session } = await supabase.from("admin_sessions").select("category_id,mode,pending_file_id").eq("user_id", userId).maybeSingle();
+      const session = await getSession(userId);
 
       if (message.photo?.length) {
         if (!session?.category_id) {
-          await send(token, chatId, "Erstelle zuerst eine Kategorie mit <code>/neuekategorie Name</code>.");
+          await send(token, chatId, "Erstelle zuerst eine Kategorie mit <code>/neuekategorie Name</code> oder öffne <code>/kategorien</code>.");
           return NextResponse.json({ ok: true });
         }
         const bestPhoto = message.photo[message.photo.length - 1];
+
+        if (session.mode === "awaiting_replacement_photo" && session.pending_item_id) {
+          const uploaded = await uploadTelegramPhoto(token, bestPhoto.file_id, userId);
+          const { data: old } = await supabase.from("items").select("storage_path").eq("id", session.pending_item_id).maybeSingle();
+          const { error } = await supabase.from("items").update({ image_url: uploaded.imageUrl, storage_path: uploaded.objectPath }).eq("id", session.pending_item_id);
+          if (error) throw error;
+          if (old?.storage_path) await supabase.storage.from(IMAGE_BUCKET).remove([old.storage_path]);
+          await setSession(userId, { mode: "awaiting_photo", pending_item_id: null, pending_file_id: null });
+          await send(token, chatId, "✅ Bild wurde ersetzt.");
+          return NextResponse.json({ ok: true });
+        }
+
+        const count = await categoryCount(session.category_id);
+        if (count >= 10) {
+          await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
+          return NextResponse.json({ ok: true });
+        }
+
         if (message.caption?.trim()) {
-          const imageUrl = await uploadTelegramPhoto(token, bestPhoto.file_id, userId);
-          const { count } = await supabase.from("items").select("id", { count: "exact", head: true }).eq("category_id", session.category_id);
-          if ((count ?? 0) >= 10) {
-            await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
-            return NextResponse.json({ ok: true });
-          }
-          await supabase.from("items").insert({ category_id: session.category_id, title: message.caption.trim(), image_url: imageUrl, position: (count ?? 0) + 1 });
-          await send(token, chatId, `✅ <b>${escapeHtml(message.caption.trim())}</b> hinzugefügt. Sende das nächste Bild oder /fertig.`);
+          const uploaded = await uploadTelegramPhoto(token, bestPhoto.file_id, userId);
+          const { error } = await supabase.from("items").insert({
+            category_id: session.category_id,
+            title: message.caption.trim(),
+            image_url: uploaded.imageUrl,
+            storage_path: uploaded.objectPath,
+            position: count + 1
+          });
+          if (error) throw error;
+          await setSession(userId, { mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+          await send(token, chatId, `✅ <b>${escapeHtml(message.caption.trim())}</b> hinzugefügt (${count + 1}/10). Sende das nächste Bild oder /fertig.`);
         } else {
-          await supabase.from("admin_sessions").update({ mode: "awaiting_title", pending_file_id: bestPhoto.file_id, updated_at: new Date().toISOString() }).eq("user_id", userId);
+          await setSession(userId, { mode: "awaiting_title", pending_file_id: bestPhoto.file_id, pending_item_id: null });
           await send(token, chatId, "Wie heißt dieses Bild? Sende jetzt nur den Namen.");
         }
         return NextResponse.json({ ok: true });
       }
 
-      if (text && !command && session?.mode === "awaiting_title" && session.pending_file_id) {
-        const { count } = await supabase.from("items").select("id", { count: "exact", head: true }).eq("category_id", session.category_id);
-        if ((count ?? 0) >= 10) {
-          await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
+      if (text && !isCommand && session) {
+        if (session.mode === "awaiting_title" && session.pending_file_id && session.category_id) {
+          const count = await categoryCount(session.category_id);
+          if (count >= 10) {
+            await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
+            return NextResponse.json({ ok: true });
+          }
+          const uploaded = await uploadTelegramPhoto(token, session.pending_file_id, userId);
+          const { error } = await supabase.from("items").insert({
+            category_id: session.category_id,
+            title: text,
+            image_url: uploaded.imageUrl,
+            storage_path: uploaded.objectPath,
+            position: count + 1
+          });
+          if (error) throw error;
+          await setSession(userId, { mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+          await send(token, chatId, `✅ <b>${escapeHtml(text)}</b> hinzugefügt (${count + 1}/10). Sende das nächste Bild oder /fertig.`);
           return NextResponse.json({ ok: true });
         }
-        const imageUrl = await uploadTelegramPhoto(token, session.pending_file_id, userId);
-        await supabase.from("items").insert({ category_id: session.category_id, title: text, image_url: imageUrl, position: (count ?? 0) + 1 });
-        await supabase.from("admin_sessions").update({ mode: "awaiting_photo", pending_file_id: null, updated_at: new Date().toISOString() }).eq("user_id", userId);
-        await send(token, chatId, `✅ <b>${escapeHtml(text)}</b> hinzugefügt. Sende das nächste Bild oder /fertig.`);
-        return NextResponse.json({ ok: true });
+        if (session.mode === "awaiting_category_name" && session.category_id) {
+          const { error } = await supabase.from("categories").update({ name: text }).eq("id", session.category_id);
+          if (error) throw error;
+          await setSession(userId, { mode: "awaiting_photo", pending_item_id: null, pending_file_id: null });
+          await send(token, chatId, `✅ Kategorie heißt jetzt <b>${escapeHtml(text)}</b>.`);
+          return NextResponse.json({ ok: true });
+        }
+        if (session.mode === "awaiting_item_name" && session.pending_item_id) {
+          const { error } = await supabase.from("items").update({ title: text }).eq("id", session.pending_item_id);
+          if (error) throw error;
+          await setSession(userId, { mode: "awaiting_photo", pending_item_id: null, pending_file_id: null });
+          await send(token, chatId, `✅ Eintrag heißt jetzt <b>${escapeHtml(text)}</b>.`);
+          return NextResponse.json({ ok: true });
+        }
       }
     }
 
     if (command !== "/blindranking" && command !== "/start") return NextResponse.json({ ok: true });
 
     if (!isPrivate) {
-      const requestedName = command === "/blindranking" ? text.slice(text.indexOf(" ") + 1).trim() : "";
+      const requestedName = command === "/blindranking" ? commandArg(text) : "";
       let categoryId: string | null = null;
       let categoryName = "aktive Kategorie";
-      if (requestedName && requestedName !== text) {
+      if (requestedName) {
         const category = await findCategoryByName(requestedName);
         if (!category) {
           await send(token, chatId, "Kategorie nicht gefunden. Nutze /blindranking ohne Zusatz für die aktive Kategorie.");
@@ -208,7 +454,7 @@ export async function POST(request: NextRequest) {
         }
       }
       if (!categoryId) {
-        await send(token, chatId, "Noch keine aktive Kategorie vorhanden. Der Admin muss zuerst Bilder hinzufügen.");
+        await send(token, chatId, "Noch keine aktive Kategorie vorhanden. Der Admin muss zuerst eine Kategorie fertigstellen.");
         return NextResponse.json({ ok: true });
       }
       const bot = await telegramApi(token, "getMe", {});

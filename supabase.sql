@@ -12,10 +12,13 @@ create table if not exists items (
   category_id uuid not null references categories(id) on delete cascade,
   title text not null,
   image_url text not null,
+  storage_path text,
   position integer not null,
   created_at timestamptz not null default now(),
   unique(category_id, position)
 );
+
+alter table items add column if not exists storage_path text;
 
 create table if not exists app_settings (
   id integer primary key check (id = 1),
@@ -28,14 +31,16 @@ create table if not exists admin_sessions (
   category_id uuid references categories(id) on delete cascade,
   mode text not null default 'awaiting_photo',
   pending_file_id text,
+  pending_item_id uuid references items(id) on delete set null,
   updated_at timestamptz not null default now()
 );
+
+alter table admin_sessions add column if not exists pending_item_id uuid references items(id) on delete set null;
 
 alter table categories enable row level security;
 alter table items enable row level security;
 alter table app_settings enable row level security;
 alter table admin_sessions enable row level security;
--- Die App greift ausschließlich serverseitig mit dem Service-Role-Key zu.
 
 insert into storage.buckets (id, name, public)
 values ('blind-ranking-images', 'blind-ranking-images', true)
