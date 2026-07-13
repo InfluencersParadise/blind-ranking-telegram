@@ -128,3 +128,16 @@ Mit `/commands` zeigt der Bot alle verfügbaren Befehle und ein Button-Menü an.
 - `/fertig` – Bearbeitung abschließen und aktivieren
 - `/abbrechen` – aktuelle Eingabe abbrechen
 - `/commands` – Hilfe und Schnellzugriff anzeigen
+
+## Update 2.2 – Bilder/Text, bis zu 30 Einträge und Stimmenverteilung
+
+Vor dem Deployment den aktualisierten Inhalt von `supabase.sql` einmal im Supabase SQL Editor ausführen. Die Befehle sind migrationssicher (`if not exists`).
+
+In `/kategorien` → Kategorie auswählen kann eingestellt werden:
+
+- **Ergebnis mit Bildern:** zuerst Bilder/Alben, danach eine separate Textnachricht.
+- **Ergebnis ohne Bilder:** nur die Textnachricht.
+
+Telegram erlaubt pro Album höchstens 10 Bilder. Kategorien dürfen nun bis zu 30 Einträge enthalten; größere Rankings werden automatisch in mehrere Alben aufgeteilt.
+
+Pro Nutzer, Gruppe und Kategorie wird eine Stimme gespeichert. Eine erneute Abgabe ersetzt die vorherige Stimme. Nach dem Absenden zeigt die Textnachricht zusätzlich die aggregierte Platzverteilung der anderen Nutzer in derselben Gruppe.

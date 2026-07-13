@@ -46,8 +46,8 @@ export default function Home() {
         return response.json() as Promise<GameData>;
       })
       .then((data) => {
-        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 10) {
-          throw new Error("In game-data.json müssen 2 bis 10 Einträge stehen.");
+        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) {
+          throw new Error("In game-data.json müssen 2 bis 30 Einträge stehen.");
         }
         const valid = data.items.every((item) => item.id && item.title && item.image);
         if (!valid) throw new Error("Jeder Eintrag braucht id, title und image.");
@@ -60,7 +60,7 @@ export default function Home() {
   const items = game?.items ?? [];
   const done = game !== null && round >= items.length;
   const current = items[round];
-  const gridStyle = useMemo(() => ({ gridTemplateColumns: `repeat(${Math.min(items.length, 5)}, 1fr)` }), [items.length]);
+  const gridStyle = useMemo(() => ({ gridTemplateColumns: `repeat(${Math.min(items.length, 5)}, minmax(48px, 1fr))` }), [items.length]);
 
   function choose(position: number) {
     if (!current || ranking[position]) return;

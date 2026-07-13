@@ -134,7 +134,8 @@ async function sendCommands(token: string, chatId: string | number, isAdmin: boo
       "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
       "<code>/abbrechen</code> – aktuelle Eingabe abbrechen\n\n" +
       "<b>🖼 Bilder</b>\n" +
-      "Sende ein Bild im privaten Chat. Den Namen kannst du direkt als Bildunterschrift mitsenden."
+      "Sende ein Bild im privaten Chat. Den Namen kannst du direkt als Bildunterschrift mitsenden.\n" +
+      "Pro Kategorie sind 2 bis 30 Bilder möglich. In der Kategorienverwaltung kannst du Ergebnisbilder ein- oder ausschalten."
     : "";
 
   const keyboard = isAdmin
@@ -177,18 +178,20 @@ async function categoryMenu(token: string, chatId: string | number) {
 
 async function showCategoryActions(token: string, chatId: string | number, categoryId: string) {
   const supabase = getSupabaseAdmin();
-  const { data: category, error } = await supabase.from("categories").select("id,name").eq("id", categoryId).maybeSingle();
+  const { data: category, error } = await supabase.from("categories").select("id,name,send_images").eq("id", categoryId).maybeSingle();
   if (error) throw error;
   if (!category) {
     await send(token, chatId, "Kategorie nicht gefunden.");
     return;
   }
   const count = await categoryCount(categoryId);
-  await send(token, chatId, `<b>${escapeHtml(category.name)}</b>\n${count} Bilder`, {
+  const imageMode = category.send_images !== false ? "🖼 Bilder werden gesendet" : "📝 Nur Text wird gesendet";
+  await send(token, chatId, `<b>${escapeHtml(category.name)}</b>\n${count} Bilder\n${imageMode}`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: "✅ Aktivieren", callback_data: `activate:${categoryId}` }, { text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }],
         [{ text: "🖼 Bilder verwalten", callback_data: `items:${categoryId}` }],
+        [{ text: category.send_images !== false ? "📝 Ergebnis ohne Bilder" : "🖼 Ergebnis mit Bildern", callback_data: `toggleimages:${categoryId}` }],
         [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
         [{ text: "🗑 Kategorie löschen", callback_data: `delcatask:${categoryId}` }]
       ]
@@ -250,6 +253,15 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
     return;
   }
   if (action === "items") return showItems(token, chatId, id);
+  if (action === "toggleimages") {
+    const { data: category } = await supabase.from("categories").select("send_images").eq("id", id).maybeSingle();
+    if (!category) return send(token, chatId, "Kategorie nicht gefunden.");
+    const nextValue = category.send_images === false;
+    const { error } = await supabase.from("categories").update({ send_images: nextValue }).eq("id", id);
+    if (error) throw error;
+    await send(token, chatId, nextValue ? "✅ Ergebnisbilder sind aktiviert." : "✅ Ergebnisse werden künftig nur als Text gesendet.");
+    return showCategoryActions(token, chatId, id);
+  }
   if (action === "renamecat") {
     await setSession(adminId, { category_id: id, mode: "awaiting_category_name", pending_file_id: null, pending_item_id: null });
     await send(token, chatId, "Sende jetzt den neuen Namen der Kategorie.");
@@ -421,8 +433,8 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true });
         }
         const count = await categoryCount(session.category_id);
-        if (count < 2 || count > 10) {
-          await send(token, chatId, `Die Kategorie hat aktuell ${count} Bilder. Erlaubt sind 2 bis 10.`);
+        if (count < 2 || count > 30) {
+          await send(token, chatId, `Die Kategorie hat aktuell ${count} Bilder. Erlaubt sind 2 bis 30.`);
           return NextResponse.json({ ok: true });
         }
         await supabase.from("app_settings").upsert({ id: 1, active_category_id: session.category_id });
@@ -452,8 +464,8 @@ export async function POST(request: NextRequest) {
         }
 
         const count = await categoryCount(session.category_id);
-        if (count >= 10) {
-          await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
+        if (count >= 30) {
+          await send(token, chatId, "Maximal 30 Bilder pro Kategorie.");
           return NextResponse.json({ ok: true });
         }
 
@@ -468,7 +480,7 @@ export async function POST(request: NextRequest) {
           });
           if (error) throw error;
           await setSession(userId, { mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
-          await send(token, chatId, `✅ <b>${escapeHtml(message.caption.trim())}</b> hinzugefügt (${count + 1}/10). Sende das nächste Bild oder /fertig.`);
+          await send(token, chatId, `✅ <b>${escapeHtml(message.caption.trim())}</b> hinzugefügt (${count + 1}/30). Sende das nächste Bild oder /fertig.`);
         } else {
           await setSession(userId, { mode: "awaiting_title", pending_file_id: bestPhoto.file_id, pending_item_id: null });
           await send(token, chatId, "Wie heißt dieses Bild? Sende jetzt nur den Namen.");
@@ -492,8 +504,8 @@ export async function POST(request: NextRequest) {
         }
         if (session.mode === "awaiting_title" && session.pending_file_id && session.category_id) {
           const count = await categoryCount(session.category_id);
-          if (count >= 10) {
-            await send(token, chatId, "Maximal 10 Bilder pro Kategorie.");
+          if (count >= 30) {
+            await send(token, chatId, "Maximal 30 Bilder pro Kategorie.");
             return NextResponse.json({ ok: true });
           }
           const uploaded = await uploadTelegramPhoto(token, session.pending_file_id, userId);
@@ -506,7 +518,7 @@ export async function POST(request: NextRequest) {
           });
           if (error) throw error;
           await setSession(userId, { mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
-          await send(token, chatId, `✅ <b>${escapeHtml(text)}</b> hinzugefügt (${count + 1}/10). Sende das nächste Bild oder /fertig.`);
+          await send(token, chatId, `✅ <b>${escapeHtml(text)}</b> hinzugefügt (${count + 1}/30). Sende das nächste Bild oder /fertig.`);
           return NextResponse.json({ ok: true });
         }
         if (session.mode === "awaiting_category_name" && session.category_id) {

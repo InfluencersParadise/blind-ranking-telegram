@@ -36,8 +36,8 @@ export async function GET(request: NextRequest) {
       .order("position", { ascending: true });
     if (itemsError) throw itemsError;
 
-    if (!items || items.length < 2 || items.length > 10) {
-      return NextResponse.json({ error: "Die Kategorie braucht 2 bis 10 Bilder." }, { status: 400 });
+    if (!items || items.length < 2 || items.length > 30) {
+      return NextResponse.json({ error: "Die Kategorie braucht 2 bis 30 Bilder." }, { status: 400 });
     }
 
     const shuffled = [...items].sort(() => Math.random() - 0.5);

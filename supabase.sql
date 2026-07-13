@@ -45,3 +45,29 @@ alter table admin_sessions enable row level security;
 insert into storage.buckets (id, name, public)
 values ('blind-ranking-images', 'blind-ranking-images', true)
 on conflict (id) do update set public = true;
+
+
+-- Version 2.2: Ausgabe-Einstellungen und Abstimmungsverteilung
+alter table categories add column if not exists send_images boolean not null default true;
+
+create table if not exists game_votes (
+  id uuid primary key default gen_random_uuid(),
+  category_id uuid not null references categories(id) on delete cascade,
+  chat_id bigint not null,
+  user_id bigint not null,
+  player_name text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(category_id, chat_id, user_id)
+);
+
+create table if not exists vote_entries (
+  vote_id uuid not null references game_votes(id) on delete cascade,
+  item_id uuid not null references items(id) on delete cascade,
+  position integer not null check (position > 0),
+  primary key(vote_id, item_id),
+  unique(vote_id, position)
+);
+
+alter table game_votes enable row level security;
+alter table vote_entries enable row level security;
