@@ -141,3 +141,10 @@ In `/kategorien` → Kategorie auswählen kann eingestellt werden:
 Telegram erlaubt pro Album höchstens 10 Bilder. Kategorien dürfen nun bis zu 30 Einträge enthalten; größere Rankings werden automatisch in mehrere Alben aufgeteilt.
 
 Pro Nutzer, Gruppe und Kategorie wird eine Stimme gespeichert. Eine erneute Abgabe ersetzt die vorherige Stimme. Nach dem Absenden zeigt die Textnachricht zusätzlich die aggregierte Platzverteilung der anderen Nutzer in derselben Gruppe.
+
+## Version 2.3 – Einmalige Abstimmung
+
+- Jeder Telegram-Nutzer darf pro Gruppe und Kategorie nur einmal abstimmen.
+- Beim erneuten Öffnen wird das bereits gespeicherte Ranking angezeigt.
+- In der Ergebnisnachricht steht je Rang nur der Platz und der Anteil aller Stimmen, die den jeweiligen Eintrag auf Platz 1 gesetzt haben.
+- Für dieses Update ist keine neue SQL-Migration nötig; der vorhandene Unique-Constraint in `game_votes` erzwingt die Einmaligkeit zusätzlich auf Datenbankebene.

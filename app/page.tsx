@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Item = { id: string; title: string; image: string };
-type GameData = { categoryId: string; title?: string; subtitle?: string; items: Item[] };
+type PreviousItem = Item & { position: number; firstPlacePercent: number };
+type GameData = {
+  categoryId: string;
+  title?: string;
+  subtitle?: string;
+  items: Item[];
+  alreadyVoted?: boolean;
+  previousRanking?: PreviousItem[] | null;
+  totalVotes?: number;
+};
 type TelegramWebApp = {
   ready: () => void;
   expand: () => void;
@@ -14,9 +23,7 @@ type TelegramWebApp = {
   HapticFeedback?: { impactOccurred: (style: string) => void };
 };
 
-declare global {
-  interface Window { Telegram?: { WebApp: TelegramWebApp } }
-}
+declare global { interface Window { Telegram?: { WebApp: TelegramWebApp } } }
 
 export default function Home() {
   const [game, setGame] = useState<GameData | null>(null);
@@ -40,17 +47,23 @@ export default function Home() {
     setChatId(requestedChatId);
     setCategoryId(requestedCategoryId);
 
-    fetch(`/api/game${requestedCategoryId ? `?category_id=${encodeURIComponent(requestedCategoryId)}` : ""}`, { cache: "no-store" })
+    fetch("/api/game", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        initData: webApp?.initData ?? "",
+        chatId: requestedChatId,
+        categoryId: requestedCategoryId
+      })
+    })
       .then(async (response) => {
-        if (!response.ok) throw new Error("Konfiguration konnte nicht geladen werden.");
-        return response.json() as Promise<GameData>;
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Konfiguration konnte nicht geladen werden.");
+        return data as GameData;
       })
       .then((data) => {
-        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) {
-          throw new Error("In game-data.json müssen 2 bis 30 Einträge stehen.");
-        }
-        const valid = data.items.every((item) => item.id && item.title && item.image);
-        if (!valid) throw new Error("Jeder Eintrag braucht id, title und image.");
+        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) throw new Error("Die Kategorie braucht 2 bis 30 Einträge.");
         setGame(data);
         setRanking(Array(data.items.length).fill(null));
       })
@@ -67,7 +80,7 @@ export default function Home() {
     const copy = [...ranking];
     copy[position] = current;
     setRanking(copy);
-    setRound((r) => r + 1);
+    setRound((value) => value + 1);
     window.Telegram?.WebApp.HapticFeedback?.impactOccurred("medium");
   }
 
@@ -87,7 +100,7 @@ export default function Home() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Senden fehlgeschlagen");
-      setStatus("✅ Ergebnis wurde in die Gruppe gesendet.");
+      setStatus("✅ Ergebnis wurde in die Gruppe gesendet. Du kannst für diese Kategorie nicht erneut abstimmen.");
     } catch (error) {
       setStatus(`❌ ${error instanceof Error ? error.message : "Unbekannter Fehler"}`);
     } finally {
@@ -95,12 +108,32 @@ export default function Home() {
     }
   }
 
-  if (loadError) {
-    return <main><section className="card error"><div className="content"><h1>Konfigurationsfehler</h1><p>{loadError}</p></div></section></main>;
-  }
+  if (loadError) return <main><section className="card error"><div className="content"><h1>Fehler</h1><p>{loadError}</p></div></section></main>;
+  if (!game) return <main><section className="card loading"><div className="content"><p>Lade Spiel …</p></div></section></main>;
 
-  if (!game) {
-    return <main><section className="card loading"><div className="content"><p>Lade Spiel …</p></div></section></main>;
+  if (game.alreadyVoted && game.previousRanking?.length) {
+    return (
+      <main>
+        <section className="card">
+          <div className="content">
+            <p className="brand">{game.title ?? "Blind Ranking"}</p>
+            <p className="kicker">Bereits abgestimmt</p>
+            <h1>Dein bisheriges Ergebnis</h1>
+            <p className="muted">Du darfst pro Gruppe und Kategorie nur einmal abstimmen.</p>
+            <div className="ranking">
+              {game.previousRanking.map((item) => (
+                <div className="rankrow" key={item.id}>
+                  <div className="rankno">{item.position}</div>
+                  <img src={item.image} alt="" />
+                  <div><strong>{item.title}</strong><small>{item.firstPlacePercent}% wählten es auf Platz 1</small></div>
+                </div>
+              ))}
+            </div>
+            <p className="status">📊 Grundlage: {game.totalVotes ?? 0} {(game.totalVotes ?? 0) === 1 ? "Stimme" : "Stimmen"}</p>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -114,11 +147,7 @@ export default function Home() {
             <h1>{current.title}</h1>
             <p className="muted">{game.subtitle ?? "Wähle einen freien Platz. Deine Entscheidung ist endgültig."}</p>
             <div className="slots" style={gridStyle}>
-              {ranking.map((value, index) => (
-                <button className="slot" key={index} disabled={Boolean(value)} onClick={() => choose(index)}>
-                  {index + 1}
-                </button>
-              ))}
+              {ranking.map((value, index) => <button className="slot" key={index} disabled={Boolean(value)} onClick={() => choose(index)}>{index + 1}</button>)}
             </div>
           </div>
         </section>
@@ -137,9 +166,7 @@ export default function Home() {
                 </div>
               ))}
             </div>
-            <button className="primary" disabled={sharing} onClick={share}>
-              {sharing ? "Wird gesendet …" : "In Telegram-Gruppe teilen"}
-            </button>
+            <button className="primary" disabled={sharing} onClick={share}>{sharing ? "Wird gesendet …" : "Einmalig abstimmen & teilen"}</button>
             <p className="status">{status}</p>
           </div>
         </section>

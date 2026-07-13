@@ -37,3 +37,4 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
   .slots { gap: 6px; }
   .slot { min-height: 48px; border-radius: 12px; }
 }
+.rankrow small { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; line-height: 1.35; }
