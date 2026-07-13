@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin, IMAGE_BUCKET } from "../../../../lib/supabase";
 
@@ -11,6 +12,8 @@ type TelegramMessage = {
   chat?: TelegramChat;
   from?: TelegramUser;
   photo?: TelegramPhoto[];
+  message_thread_id?: number;
+  is_topic_message?: boolean;
 };
 type CallbackQuery = {
   id: string;
@@ -28,6 +31,87 @@ type SessionRow = {
   pending_item_id: string | null;
 };
 
+type BotRole = "owner" | "creator" | "player";
+type BotUserRow = { user_id: number; role: BotRole; active: boolean; username?: string | null; display_name?: string | null; category_limit?: number | null; categories_used?: number | null };
+
+function tokenHash(value: string) {
+  return crypto.createHash("sha256").update(value.trim().toUpperCase()).digest("hex");
+}
+
+function newInviteToken() {
+  const raw = crypto.randomBytes(9).toString("base64url").toUpperCase();
+  return `BR-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+async function getRole(userId: number, ownerId: number): Promise<BotRole> {
+  if (userId === ownerId) return "owner";
+  const { data, error } = await getSupabaseAdmin().from("bot_users").select("role,active").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data?.active && data.role === "creator" ? "creator" : "player";
+}
+
+async function saveCreator(user: TelegramUser, approvedBy: number, categoryLimit: number | null) {
+  const displayName = user.first_name || user.username || String(user.id);
+  const { error } = await getSupabaseAdmin().from("bot_users").upsert({
+    user_id: user.id,
+    role: "creator",
+    active: true,
+    username: user.username ?? null,
+    display_name: displayName,
+    approved_by: approvedBy,
+    category_limit: categoryLimit,
+    updated_at: new Date().toISOString()
+  }, { onConflict: "user_id" });
+  if (error) throw error;
+}
+
+async function getCreatorQuota(userId: number) {
+  const { data, error } = await getSupabaseAdmin().from("bot_users")
+    .select("category_limit,categories_used,active,role")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.active || data.role !== "creator") return null;
+  return { limit: data.category_limit as number | null, used: Number(data.categories_used ?? 0) };
+}
+
+async function assertCreatorCanCreate(userId: number, role: BotRole) {
+  if (role === "owner") return;
+  if (role !== "creator") throw new Error("Nur Owner oder Creator dürfen Kategorien erstellen.");
+  const quota = await getCreatorQuota(userId);
+  if (!quota) throw new Error("Dein Creator-Zugang ist nicht aktiv.");
+  if (quota.limit !== null && quota.used >= quota.limit) {
+    throw new Error(`Dein Kategorienkontingent ist aufgebraucht (${quota.used}/${quota.limit}).`);
+  }
+}
+
+async function incrementCreatorUsage(userId: number, role: BotRole) {
+  if (role !== "creator") return;
+  const quota = await getCreatorQuota(userId);
+  if (!quota) throw new Error("Creator-Konto nicht gefunden.");
+  const { error } = await getSupabaseAdmin().from("bot_users")
+    .update({ categories_used: quota.used + 1, updated_at: new Date().toISOString() })
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
+async function canManageCategory(userId: number, role: BotRole, categoryId: string) {
+  if (role === "owner") return true;
+  if (role !== "creator") return false;
+  const { data, error } = await getSupabaseAdmin().from("categories").select("created_by").eq("id", categoryId).maybeSingle();
+  if (error) throw error;
+  return Number(data?.created_by) === userId;
+}
+
+async function canManageItem(userId: number, role: BotRole, itemId: string) {
+  if (role === "owner") return true;
+  if (role !== "creator") return false;
+  const { data, error } = await getSupabaseAdmin().from("items").select("category_id,categories!inner(created_by)").eq("id", itemId).maybeSingle();
+  if (error) throw error;
+  const categories = data?.categories as unknown as { created_by?: number } | null;
+  return Number(categories?.created_by) === userId;
+}
+
 async function telegramApi(token: string, method: string, payload: unknown) {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
@@ -41,6 +125,38 @@ async function telegramApi(token: string, method: string, payload: unknown) {
 
 async function send(token: string, chatId: string | number, text: string, extra: Record<string, unknown> = {}) {
   return telegramApi(token, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...extra });
+}
+
+type GroupTopicSettings = { poll_thread_id: number | null; results_thread_id: number | null };
+
+async function getGroupTopicSettings(chatId: string | number): Promise<GroupTopicSettings> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("group_topic_settings")
+    .select("poll_thread_id,results_thread_id")
+    .eq("chat_id", String(chatId))
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    poll_thread_id: data?.poll_thread_id ?? null,
+    results_thread_id: data?.results_thread_id ?? null
+  };
+}
+
+async function setGroupTopicSetting(chatId: string | number, field: "poll_thread_id" | "results_thread_id", threadId: number | null) {
+  const supabase = getSupabaseAdmin();
+  const current = await getGroupTopicSettings(chatId);
+  const payload = {
+    chat_id: String(chatId),
+    poll_thread_id: field === "poll_thread_id" ? threadId : current.poll_thread_id,
+    results_thread_id: field === "results_thread_id" ? threadId : current.results_thread_id,
+    updated_at: new Date().toISOString()
+  };
+  const { error } = await supabase.from("group_topic_settings").upsert(payload, { onConflict: "chat_id" });
+  if (error) throw error;
+}
+
+function topicExtra(threadId: number | null | undefined): Record<string, unknown> {
+  return threadId ? { message_thread_id: threadId } : {};
 }
 
 async function answerCallback(token: string, callbackQueryId: string, text?: string) {
@@ -124,8 +240,9 @@ async function normalizePositions(categoryId: string) {
 }
 
 
-async function sendCommands(token: string, chatId: string | number, isAdmin: boolean) {
-  const adminSection = isAdmin
+async function sendCommands(token: string, chatId: string | number, role: BotRole | null) {
+  const isManager = role === "owner" || role === "creator";
+  const adminSection = isManager
     ? "\n\n<b>🛠 Verwaltung</b>\n" +
       "<code>/neuekategorie Name</code> – neue Kategorie anlegen\n" +
       "<code>/kategorien</code> – Kategorien mit Buttons verwalten\n" +
@@ -138,11 +255,12 @@ async function sendCommands(token: string, chatId: string | number, isAdmin: boo
       "Pro Kategorie sind 2 bis 30 Bilder möglich. In der Kategorienverwaltung kannst du Ergebnisbilder ein- oder ausschalten."
     : "";
 
-  const keyboard = isAdmin
+  const keyboard = isManager
     ? [
         [{ text: "🎮 Spiel starten", callback_data: "menuplay:x" }],
         [{ text: "➕ Neue Kategorie", callback_data: "menunew:x" }, { text: "📂 Kategorien", callback_data: "menucats:x" }],
-        [{ text: "❓ Hilfe", callback_data: "menuhelp:x" }]
+        [{ text: "❓ Hilfe", callback_data: "menuhelp:x" }],
+        ...(role === "owner" ? [[{ text: "🔐 Rollen & Tokens", callback_data: "rolemenu:x" }]] : [])
       ]
     : [[{ text: "🎮 Spiel starten", callback_data: "menuplay:x" }]];
 
@@ -157,15 +275,23 @@ async function sendCommands(token: string, chatId: string | number, isAdmin: boo
       "<code>/top</code> – meistgespielte Kategorien anzeigen\n" +
       "<code>/leaderboard</code> – aktivste Spieler dieser Gruppe anzeigen\n" +
       "<code>/history</code> – letzte Abstimmungen dieser Gruppe anzeigen\n" +
+      "<code>/themen</code> – Zielthemen für Umfrage und Ergebnisse anzeigen\n" +
+      "<code>/setumfragethema</code> – aktuelles Thema für Umfrage-Links festlegen\n" +
+      "<code>/setergebnisthema</code> – aktuelles Thema für Ergebnisse festlegen\n" +
+      "<code>/themenreset</code> – beide Zielthemen zurücksetzen\n" +
+      "<code>/aktivieren TOKEN</code> – einmaligen Zugangstoken einlösen\n" +
+      (role === "owner" ? "<code>/rollen</code> – Rollen- und Tokenverwaltung öffnen\n" : "") +
       "<code>/commands</code> – diese Übersicht anzeigen" +
       adminSection,
     { reply_markup: { inline_keyboard: keyboard } }
   );
 }
 
-async function categoryMenu(token: string, chatId: string | number) {
+async function categoryMenu(token: string, chatId: string | number, userId: number, role: BotRole) {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
+  let query = supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
+  if (role === "creator") query = query.eq("created_by", userId);
+  const { data, error } = await query;
   if (error) throw error;
   if (!data?.length) {
     await send(token, chatId, "Noch keine Kategorien vorhanden. Erstelle eine mit <code>/neuekategorie Name</code>.");
@@ -218,20 +344,114 @@ async function showItems(token: string, chatId: string | number, categoryId: str
   });
 }
 
-async function handleCallback(token: string, callback: CallbackQuery, adminId: number) {
-  if (callback.from.id !== adminId || !callback.message?.chat?.id || !callback.data) {
-    await answerCallback(token, callback.id, "Nicht erlaubt");
-    return;
+async function showRoleMenu(token: string, chatId: string | number) {
+  await send(token, chatId, `<b>🔐 Creator- & Tokenverwaltung</b>
+
+Player sind automatisch alle Nutzer. Nur Owner können dieses Menü verwenden.`, {
+    reply_markup: { inline_keyboard: [
+      [{ text: "🎟 Creator-Token erstellen", callback_data: "tokenmenu:x" }],
+      [{ text: "➕ Creator per ID genehmigen", callback_data: "approvemenu:x" }],
+      [{ text: "👥 Creator anzeigen", callback_data: "roleusers:x" }],
+      [{ text: "🧾 Offene Tokens", callback_data: "roletokens:x" }],
+      [{ text: "📊 Kontingent ändern", callback_data: "quotaedit:x" }],
+      [{ text: "🚫 Creator sperren", callback_data: "rolerevoke:x" }]
+    ] }
+  });
+}
+
+function quotaLabel(limit: number | null, used = 0) {
+  return limit === null ? `unbegrenzt · ${used} erstellt` : `${used}/${limit} verwendet`;
+}
+
+function quotaButtons(prefix: string) {
+  return [
+    [{ text: "1 Kategorie", callback_data: `${prefix}:1` }, { text: "3 Kategorien", callback_data: `${prefix}:3` }],
+    [{ text: "5 Kategorien", callback_data: `${prefix}:5` }, { text: "10 Kategorien", callback_data: `${prefix}:10` }],
+    [{ text: "♾ Unbegrenzt", callback_data: `${prefix}:u` }]
+  ];
+}
+
+async function listRoleUsers(token: string, chatId: string | number, ownerId: number) {
+  const { data, error } = await getSupabaseAdmin().from("bot_users").select("user_id,role,username,display_name,active,category_limit,categories_used").eq("role", "creator").order("created_at");
+  if (error) throw error;
+  const rows = [`👑 <b>Owner</b> — <code>${ownerId}</code>`];
+  for (const user of data ?? []) {
+    const label = user.username ? `@${escapeHtml(user.username)}` : escapeHtml(user.display_name || String(user.user_id));
+    rows.push(`${user.active ? "✅" : "🚫"} <b>Creator</b> — ${label} · <code>${user.user_id}</code> · ${quotaLabel(user.category_limit, Number(user.categories_used ?? 0))}`);
   }
+  await send(token, chatId, `<b>👥 Creator</b>\n\n${rows.join("\n")}`);
+}
+
+async function listOpenTokens(token: string, chatId: string | number) {
+  const { data, error } = await getSupabaseAdmin().from("invite_tokens").select("token_hint,role,expires_at,created_at,category_limit").is("used_at", null).is("revoked_at", null).order("created_at", { ascending: false }).limit(30);
+  if (error) throw error;
+  if (!data?.length) return send(token, chatId, "Keine offenen Tokens vorhanden.");
+  const rows = data.map((entry) => `• <code>${escapeHtml(entry.token_hint)}</code> — Creator · ${entry.category_limit === null ? "unbegrenzt" : `${entry.category_limit} Kategorien`}${entry.expires_at ? ` · gültig bis ${new Date(entry.expires_at).toLocaleDateString("de-DE")}` : ""}`);
+  await send(token, chatId, `<b>🧾 Offene Tokens</b>\n\n${rows.join("\n")}\n\nAus Sicherheitsgründen wird nur ein Hinweis, nicht der vollständige Token, gespeichert.`);
+}
+
+async function handleCallback(token: string, callback: CallbackQuery, ownerId: number) {
+  if (!callback.message?.chat?.id || !callback.data) { await answerCallback(token, callback.id, "Ungültige Aktion"); return; }
+  const role = await getRole(callback.from.id, ownerId);
   const chatId = String(callback.message.chat.id);
   const [action, id] = callback.data.split(":", 2);
   const supabase = getSupabaseAdmin();
   await answerCallback(token, callback.id);
 
-  if (action === "menuhelp") return sendCommands(token, chatId, true);
-  if (action === "menucats") return categoryMenu(token, chatId);
+  if (action === "menuhelp") return sendCommands(token, chatId, role);
+  if (action === "menucats") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role); }
+  if (action === "rolemenu") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return showRoleMenu(token, chatId); }
+  if (action === "roleusers") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return listRoleUsers(token, chatId, ownerId); }
+  if (action === "roletokens") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return listOpenTokens(token, chatId); }
+  if (action === "tokenmenu") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    return send(token, chatId, "<b>🎟 Creator-Token erstellen</b>\n\nWie viele Kategorien darf der Creator insgesamt erstellen?", { reply_markup: { inline_keyboard: quotaButtons("tokengen") } });
+  }
+  if (action === "tokengen") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    const categoryLimit = id === "u" ? null : Number(id);
+    if (id !== "u" && categoryLimit === null || ![1, 3, 5, 10].includes(categoryLimit as number)) return send(token, chatId, "Ungültiges Kontingent.");
+    const raw = newInviteToken();
+    const { error } = await supabase.from("invite_tokens").insert({
+      token_hash: tokenHash(raw), token_hint: `${raw.slice(0, 7)}…${raw.slice(-4)}`, role: "creator", category_limit: categoryLimit, created_by: ownerId, expires_at: null
+    });
+    if (error) throw error;
+    return send(token, chatId, `<b>🎟 Einmaliger Creator-Token</b>\n\n<code>${raw}</code>\n\nKontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>\nEinmal verwendbar, ohne Ablaufdatum.\nAktivierung: <code>/aktivieren ${raw}</code>`);
+  }
+  if (action === "approvemenu") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    return send(token, chatId, "<b>➕ Creator per ID genehmigen</b>\n\nKontingent auswählen:", { reply_markup: { inline_keyboard: quotaButtons("approvequota") } });
+  }
+  if (action === "approvequota") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    const categoryLimit = id === "u" ? null : Number(id);
+    if (id !== "u" && categoryLimit === null || ![1, 3, 5, 10].includes(categoryLimit as number)) return send(token, chatId, "Ungültiges Kontingent.");
+    await setSession(ownerId, { category_id: null, mode: `awaiting_authorize_creator_${id}`, pending_file_id: null, pending_item_id: null });
+    return send(token, chatId, `Sende jetzt die numerische Telegram-ID. Kontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
+  }
+  if (action === "quotaedit") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    await setSession(ownerId, { category_id: null, mode: "awaiting_quota_user", pending_file_id: null, pending_item_id: null });
+    return send(token, chatId, "Sende die numerische Telegram-ID des Creators, dessen Kontingent du ändern möchtest.");
+  }
+  if (action === "setquota") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    const [target, quotaCode] = id.split("_", 2);
+    const targetId = Number(target);
+    const categoryLimit = quotaCode === "u" ? null : Number(quotaCode);
+    if (!Number.isSafeInteger(targetId) || (quotaCode !== "u" && categoryLimit === null || ![1, 3, 5, 10].includes(categoryLimit as number))) return send(token, chatId, "Ungültige Auswahl.");
+    const { error } = await supabase.from("bot_users").update({ category_limit: categoryLimit, updated_at: new Date().toISOString() }).eq("user_id", targetId).eq("role", "creator");
+    if (error) throw error;
+    return send(token, chatId, `✅ Kontingent für <code>${targetId}</code>: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
+  }
+  if (action === "rolerevoke") {
+    if (role !== "owner") return send(token, chatId, "Nur Owner.");
+    await setSession(ownerId, { category_id: null, mode: "awaiting_revoke_user", pending_file_id: null, pending_item_id: null });
+    return send(token, chatId, "Sende jetzt die numerische Telegram-ID des zu sperrenden Creators.");
+  }
   if (action === "menunew") {
-    await setSession(adminId, { category_id: null, mode: "awaiting_new_category_name", pending_file_id: null, pending_item_id: null });
+    try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
+    await setSession(callback.from.id, { category_id: null, mode: "awaiting_new_category_name", pending_file_id: null, pending_item_id: null });
     await send(token, chatId, "Sende jetzt den Namen der neuen Kategorie.");
     return;
   }
@@ -245,14 +465,15 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
     });
     return;
   }
-  if (action === "cat") return showCategoryActions(token, chatId, id);
+  if (action === "cat") { if (!(await canManageCategory(callback.from.id, role, id))) return send(token, chatId, "Du darfst diese Kategorie nicht verwalten."); return showCategoryActions(token, chatId, id); }
+  if (["activate","add","items","toggleimages","renamecat","delcatask","delcat"].includes(action) && !(await canManageCategory(callback.from.id, role, id))) return send(token, chatId, "Du darfst diese Kategorie nicht verwalten.");
   if (action === "activate") {
     await supabase.from("app_settings").upsert({ id: 1, active_category_id: id });
     await send(token, chatId, "✅ Kategorie wurde aktiviert.");
     return;
   }
   if (action === "add") {
-    await setSession(adminId, { category_id: id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
+    await setSession(callback.from.id, { category_id: id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
     await send(token, chatId, "Sende jetzt ein neues Bild. Du kannst den Namen direkt als Bildunterschrift mitsenden.");
     return;
   }
@@ -267,7 +488,7 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
     return showCategoryActions(token, chatId, id);
   }
   if (action === "renamecat") {
-    await setSession(adminId, { category_id: id, mode: "awaiting_category_name", pending_file_id: null, pending_item_id: null });
+    await setSession(callback.from.id, { category_id: id, mode: "awaiting_category_name", pending_file_id: null, pending_item_id: null });
     await send(token, chatId, "Sende jetzt den neuen Namen der Kategorie.");
     return;
   }
@@ -282,6 +503,7 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
     await send(token, chatId, "🗑 Kategorie gelöscht.");
     return;
   }
+  if (["item","renameitem","replace","delitemask","delitem"].includes(action) && !(await canManageItem(callback.from.id, role, id))) return send(token, chatId, "Du darfst diesen Eintrag nicht verwalten.");
   if (action === "item") {
     const { data: item } = await supabase.from("items").select("id,title,category_id").eq("id", id).maybeSingle();
     if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
@@ -298,14 +520,14 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
   if (action === "renameitem") {
     const { data: item } = await supabase.from("items").select("category_id").eq("id", id).maybeSingle();
     if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
-    await setSession(adminId, { category_id: item.category_id, mode: "awaiting_item_name", pending_item_id: id, pending_file_id: null });
+    await setSession(callback.from.id, { category_id: item.category_id, mode: "awaiting_item_name", pending_item_id: id, pending_file_id: null });
     await send(token, chatId, "Sende jetzt den neuen Namen.");
     return;
   }
   if (action === "replace") {
     const { data: item } = await supabase.from("items").select("category_id").eq("id", id).maybeSingle();
     if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
-    await setSession(adminId, { category_id: item.category_id, mode: "awaiting_replacement_photo", pending_item_id: id, pending_file_id: null });
+    await setSession(callback.from.id, { category_id: item.category_id, mode: "awaiting_replacement_photo", pending_item_id: id, pending_file_id: null });
     await send(token, chatId, "Sende jetzt das neue Bild.");
     return;
   }
@@ -512,9 +734,9 @@ export async function POST(request: NextRequest) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   const secret = process.env.WEBHOOK_SECRET;
-  const adminId = Number(process.env.ADMIN_TELEGRAM_USER_ID);
+  const ownerId = Number(process.env.ADMIN_TELEGRAM_USER_ID);
 
-  if (!token || !appUrl || !secret || !adminId) {
+  if (!token || !appUrl || !secret || !ownerId) {
     return NextResponse.json({ ok: false, error: "Server configuration is incomplete." }, { status: 500 });
   }
   if (request.headers.get("x-telegram-bot-api-secret-token") !== secret) {
@@ -524,7 +746,7 @@ export async function POST(request: NextRequest) {
   try {
     const update = (await request.json()) as TelegramUpdate;
     if (update.callback_query) {
-      await handleCallback(token, update.callback_query, adminId);
+      await handleCallback(token, update.callback_query, ownerId);
       return NextResponse.json({ ok: true });
     }
 
@@ -538,9 +760,97 @@ export async function POST(request: NextRequest) {
     const isCommand = text.startsWith("/");
     const command = isCommand ? text.split(/\s+/)[0].split("@")[0].toLowerCase() : "";
     const supabase = getSupabaseAdmin();
+    const role = await getRole(userId, ownerId);
+
+    if (command === "/aktivieren") {
+      if (role === "creator") { await send(token, chatId, "Du bist bereits Creator. Dein Kontingent kann nur ein Owner ändern."); return NextResponse.json({ ok: true }); }
+      if (!isPrivate) { await send(token, chatId, "Aktiviere Tokens nur im privaten Chat mit dem Bot."); return NextResponse.json({ ok: true }); }
+      const raw = commandArg(text).toUpperCase();
+      if (!raw) { await send(token, chatId, "Bitte so senden: <code>/aktivieren BR-XXXX-XXXX-XXXX</code>"); return NextResponse.json({ ok: true }); }
+      const { data: invite, error } = await supabase.from("invite_tokens").select("id,role,category_limit,expires_at,used_at,revoked_at").eq("token_hash", tokenHash(raw)).maybeSingle();
+      if (error) throw error;
+      if (!invite || invite.used_at || invite.revoked_at || (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now())) { await send(token, chatId, "Dieser Token ist ungültig, abgelaufen oder bereits verwendet."); return NextResponse.json({ ok: true }); }
+      if (invite.role !== "creator") { await send(token, chatId, "Dieser ältere Token-Typ wird nicht mehr unterstützt."); return NextResponse.json({ ok: true }); }
+      await saveCreator(message.from, ownerId, invite.category_limit as number | null);
+      const { error: useError } = await supabase.from("invite_tokens").update({ used_by: userId, used_at: new Date().toISOString() }).eq("id", invite.id).is("used_at", null);
+      if (useError) throw useError;
+      await send(token, chatId, `✅ Als <b>Creator</b> freigeschaltet. Kontingent: <b>${invite.category_limit === null ? "unbegrenzt" : `${invite.category_limit} Kategorien`}</b>. Nutze <code>/meinkonto</code>.`);
+      return NextResponse.json({ ok: true });
+    }
 
     if (["/commands", "/help", "/hilfe"].includes(command)) {
-      await sendCommands(token, chatId, isPrivate && userId === adminId);
+      await sendCommands(token, chatId, role);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/rollen", "/roles"].includes(command)) {
+      if (!isPrivate || role !== "owner") await send(token, chatId, "Dieses Menü ist nur für Owner im privaten Bot-Chat verfügbar.");
+      else await showRoleMenu(token, chatId);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/meinkonto", "/myaccount"].includes(command)) {
+      if (role !== "creator") {
+        await send(token, chatId, role === "owner" ? "Owner haben ein unbegrenztes Kontingent." : "Du bist Player. Zum Erstellen eigener Kategorien brauchst du eine Creator-Freigabe.");
+      } else {
+        const quota = await getCreatorQuota(userId);
+        await send(token, chatId, quota ? `<b>🛠 Creator-Konto</b>
+
+Erstellt: ${quota.used}
+Kontingent: ${quota.limit === null ? "unbegrenzt" : quota.limit}
+Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - quota.used)}` : "Creator-Konto nicht gefunden.");
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/themen", "/topics"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Nutze <code>/themen</code> direkt in deiner Telegram-Gruppe.");
+      } else {
+        const settings = await getGroupTopicSettings(chatId);
+        const poll = settings.poll_thread_id ? `Themen-ID <code>${settings.poll_thread_id}</code>` : "Allgemeines Thema";
+        const results = settings.results_thread_id ? `Themen-ID <code>${settings.results_thread_id}</code>` : "Allgemeines Thema";
+        await send(token, chatId, `<b>📌 Zielthemen dieser Gruppe</b>\n\n🎮 Umfrage-Link: ${poll}\n🏆 Ergebnisse: ${results}\n\nSende <code>/setumfragethema</code> im gewünschten Umfrage-Thema und <code>/setergebnisthema</code> im gewünschten Ergebnis-Thema.`, topicExtra(message.message_thread_id));
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/setumfragethema", "/setpolltopic"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Diesen Befehl musst du im gewünschten Thema deiner Gruppe senden.");
+      } else if (role !== "owner") {
+        await send(token, chatId, "Nur der konfigurierte Bot-Admin darf Zielthemen ändern.", topicExtra(message.message_thread_id));
+      } else {
+        const threadId = message.message_thread_id ?? null;
+        await setGroupTopicSetting(chatId, "poll_thread_id", threadId);
+        await send(token, chatId, threadId ? "✅ Dieses Thema ist jetzt das Ziel für Umfrage-Links." : "✅ Umfrage-Links werden jetzt im allgemeinen Thema gesendet.", topicExtra(threadId));
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/setergebnisthema", "/setresulttopic"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Diesen Befehl musst du im gewünschten Thema deiner Gruppe senden.");
+      } else if (role !== "owner") {
+        await send(token, chatId, "Nur der konfigurierte Bot-Admin darf Zielthemen ändern.", topicExtra(message.message_thread_id));
+      } else {
+        const threadId = message.message_thread_id ?? null;
+        await setGroupTopicSetting(chatId, "results_thread_id", threadId);
+        await send(token, chatId, threadId ? "✅ Dieses Thema ist jetzt das Ziel für Ergebnisse." : "✅ Ergebnisse werden jetzt im allgemeinen Thema gesendet.", topicExtra(threadId));
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/themenreset", "/resettopics"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Diesen Befehl musst du in der Gruppe senden.");
+      } else if (role !== "owner") {
+        await send(token, chatId, "Nur der konfigurierte Bot-Admin darf Zielthemen ändern.", topicExtra(message.message_thread_id));
+      } else {
+        const { error } = await supabase.from("group_topic_settings").delete().eq("chat_id", chatId);
+        if (error) throw error;
+        await send(token, chatId, "✅ Zielthemen zurückgesetzt. Umfrage-Link und Ergebnisse gehen wieder ins allgemeine Thema.", topicExtra(message.message_thread_id));
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -581,13 +891,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (isPrivate && userId === adminId) {
+    if (isPrivate && (role === "owner" || role === "creator")) {
       if (["/admin", "/start"].includes(command) && !text.includes("group_")) {
-        await sendCommands(token, chatId, true);
+        await sendCommands(token, chatId, role);
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/neuekategorie") {
+        try { await assertCreatorCanCreate(userId, role); } catch (error) { await send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); return NextResponse.json({ ok: true }); }
         const name = commandArg(text);
         if (!name) {
           await send(token, chatId, "Bitte so senden: <code>/neuekategorie Meine Kategorie</code>");
@@ -601,20 +912,21 @@ export async function POST(request: NextRequest) {
           }
           throw error;
         }
+        await incrementCreatorUsage(userId, role);
         await setSession(userId, { category_id: category.id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
         await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt das erste Bild. Danach frage ich nach dem Namen – oder du setzt den Namen direkt als Bildunterschrift.`);
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/kategorien") {
-        await categoryMenu(token, chatId);
+        await categoryMenu(token, chatId, userId, role);
         return NextResponse.json({ ok: true });
       }
 
       if (command === "/bearbeiten") {
         const name = commandArg(text);
         if (!name) {
-          await categoryMenu(token, chatId);
+          await categoryMenu(token, chatId, userId, role);
           return NextResponse.json({ ok: true });
         }
         const category = await findCategoryByName(name);
@@ -622,6 +934,7 @@ export async function POST(request: NextRequest) {
           await send(token, chatId, "Kategorie nicht gefunden. Nutze <code>/kategorien</code>.");
           return NextResponse.json({ ok: true });
         }
+        if (!(await canManageCategory(userId, role, category.id))) { await send(token, chatId, "Du darfst diese Kategorie nicht verwalten."); return NextResponse.json({ ok: true }); }
         await showCategoryActions(token, chatId, category.id);
         return NextResponse.json({ ok: true });
       }
@@ -637,6 +950,7 @@ export async function POST(request: NextRequest) {
           await send(token, chatId, "Kategorie nicht gefunden.");
           return NextResponse.json({ ok: true });
         }
+        if (!(await canManageCategory(userId, role, category.id))) { await send(token, chatId, "Du darfst diese Kategorie nicht löschen."); return NextResponse.json({ ok: true }); }
         await send(token, chatId, `Kategorie <b>${escapeHtml(category.name)}</b> wirklich endgültig löschen?`, {
           reply_markup: { inline_keyboard: [[{ text: "Ja, löschen", callback_data: `delcat:${category.id}` }, { text: "Abbrechen", callback_data: "noop:x" }]] }
         });
@@ -667,6 +981,41 @@ export async function POST(request: NextRequest) {
       }
 
       const session = await getSession(userId);
+
+      if (role === "owner" && text && !isCommand && session?.mode.startsWith("awaiting_authorize_creator_")) {
+        const targetId = Number(text.trim());
+        const quotaCode = session.mode.split("_").pop() ?? "u";
+        const categoryLimit = quotaCode === "u" ? null : Number(quotaCode);
+        if (!Number.isSafeInteger(targetId) || targetId <= 0) { await send(token, chatId, "Ungültige Telegram-ID. Sende nur die numerische ID."); return NextResponse.json({ ok: true }); }
+        await saveCreator({ id: targetId }, ownerId, categoryLimit);
+        await supabase.from("admin_sessions").delete().eq("user_id", userId);
+        await send(token, chatId, `✅ <code>${targetId}</code> wurde als <b>Creator</b> genehmigt. Kontingent: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
+        return NextResponse.json({ ok: true });
+      }
+      if (role === "owner" && text && !isCommand && session?.mode === "awaiting_quota_user") {
+        const targetId = Number(text.trim());
+        if (!Number.isSafeInteger(targetId) || targetId <= 0) { await send(token, chatId, "Ungültige Telegram-ID."); return NextResponse.json({ ok: true }); }
+        const { data: creator } = await supabase.from("bot_users").select("user_id,category_limit,categories_used,active").eq("user_id", targetId).eq("role", "creator").maybeSingle();
+        if (!creator) { await send(token, chatId, "Creator nicht gefunden."); return NextResponse.json({ ok: true }); }
+        await supabase.from("admin_sessions").delete().eq("user_id", userId);
+        await send(token, chatId, `<b>Kontingent ändern</b>
+Creator: <code>${targetId}</code>
+Aktuell: ${quotaLabel(creator.category_limit, Number(creator.categories_used ?? 0))}
+
+Neues Kontingent wählen:`, {
+          reply_markup: { inline_keyboard: quotaButtons(`setquota_${targetId}`).map(row => row.map(button => ({ ...button, callback_data: button.callback_data.replace(`setquota_${targetId}:`, `setquota:${targetId}_`) }))) }
+        });
+        return NextResponse.json({ ok: true });
+      }
+      if (role === "owner" && text && !isCommand && session?.mode === "awaiting_revoke_user") {
+        const targetId = Number(text.trim());
+        if (!Number.isSafeInteger(targetId) || targetId <= 0 || targetId === ownerId) { await send(token, chatId, "Ungültige ID oder Owner kann nicht gesperrt werden."); return NextResponse.json({ ok: true }); }
+        const { error } = await supabase.from("bot_users").update({ active: false, updated_at: new Date().toISOString() }).eq("user_id", targetId);
+        if (error) throw error;
+        await supabase.from("admin_sessions").delete().eq("user_id", userId);
+        await send(token, chatId, `🚫 Creator <code>${targetId}</code> wurde gesperrt. Das Konto bleibt als Player nutzbar.`);
+        return NextResponse.json({ ok: true });
+      }
 
       if (message.photo?.length) {
         if (!session?.category_id) {
@@ -713,6 +1062,7 @@ export async function POST(request: NextRequest) {
 
       if (text && !isCommand && session) {
         if (session.mode === "awaiting_new_category_name") {
+          try { await assertCreatorCanCreate(userId, role); } catch (error) { await send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); return NextResponse.json({ ok: true }); }
           const { data: category, error } = await supabase.from("categories").insert({ name: text, created_by: userId }).select("id,name").single();
           if (error) {
             if (String(error.message).toLowerCase().includes("duplicate")) {
@@ -721,6 +1071,7 @@ export async function POST(request: NextRequest) {
             }
             throw error;
           }
+          await incrementCreatorUsage(userId, role);
           await setSession(userId, { category_id: category.id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
           await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt. Sende jetzt das erste Bild.`);
           return NextResponse.json({ ok: true });
@@ -762,6 +1113,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (command !== "/blindranking" && command !== "/start") return NextResponse.json({ ok: true });
+    if (!isPrivate && role === "player") {
+      await send(token, chatId, "Nur Owner oder Creator dürfen ein neues Spiel starten.", topicExtra(message.message_thread_id));
+      return NextResponse.json({ ok: true });
+    }
 
     if (!isPrivate) {
       const requestedName = command === "/blindranking" ? commandArg(text) : "";
@@ -771,6 +1126,10 @@ export async function POST(request: NextRequest) {
         const category = await findCategoryByName(requestedName);
         if (!category) {
           await send(token, chatId, "Kategorie nicht gefunden. Nutze /blindranking ohne Zusatz für die aktive Kategorie.");
+          return NextResponse.json({ ok: true });
+        }
+        if (role === "creator" && !(await canManageCategory(userId, role, category.id))) {
+          await send(token, chatId, "Creator dürfen nur eigene Kategorien starten.");
           return NextResponse.json({ ok: true });
         }
         categoryId = category.id;
@@ -783,13 +1142,19 @@ export async function POST(request: NextRequest) {
           if (category?.name) categoryName = category.name;
         }
       }
+      if (categoryId && role === "creator" && !(await canManageCategory(userId, role, categoryId))) {
+        await send(token, chatId, "Die aktive Kategorie gehört einem anderen Creator. Starte eine eigene Kategorie mit <code>/blindranking Kategoriename</code>.");
+        return NextResponse.json({ ok: true });
+      }
       if (!categoryId) {
         await send(token, chatId, "Noch keine aktive Kategorie vorhanden. Der Admin muss zuerst eine Kategorie fertigstellen.");
         return NextResponse.json({ ok: true });
       }
       const bot = await telegramApi(token, "getMe", {});
       const deepLink = `https://t.me/${bot.username}?start=group_${chatId}_${categoryId}`;
+      const topicSettings = await getGroupTopicSettings(chatId);
       await send(token, chatId, `🎲 <b>Blind Ranking</b>\nKategorie: <b>${escapeHtml(categoryName)}</b>\n\nTippe auf den Button.`, {
+        ...topicExtra(topicSettings.poll_thread_id),
         reply_markup: { inline_keyboard: [[{ text: "🎮 Spiel starten", url: deepLink }]] }
       });
       return NextResponse.json({ ok: true });

@@ -1,179 +1,52 @@
-# Blind Ranking Telegram – Version 2
+# Blind Ranking Telegram V3.1 – öffentliche Player, Creator-Kontingente
 
-Diese Version verwaltet Kategorien und Bilder vollständig im privaten Telegram-Chat mit dem Bot. Die Mini App läuft dauerhaft im Dark Mode.
+## Rollen
 
-## Wichtige Verbesserung
+- **Owner:** über `ADMIN_TELEGRAM_USER_ID`, unbegrenzt, verwaltet Creator und Tokens.
+- **Creator:** direkte Freigabe per Telegram-ID oder einmaliger Creator-Token. Jeder Creator besitzt ein Kontingent von 1, 3, 5, 10 Kategorien oder unbegrenzt.
+- **Player:** automatisch jeder Telegram-Nutzer. Keine Freigabe und kein Token nötig. Player dürfen abstimmen und Statistiken ansehen, aber keine Kategorien erstellen und keine Spiele in Gruppen starten.
 
-In der früheren Version wurde eine normale Namensnachricht versehentlich wie ein Befehl behandelt. Dadurch blieb der Bot nach der Frage „Wie heißt dieses Bild?“ stehen. Version 2 behebt diesen Fehler.
+Das Kategorienkontingent zählt erstellte Kategorien dauerhaft. Das Löschen einer Kategorie gibt keinen Platz zurück. Der Owner kann das Kontingent später ändern.
 
-## Funktionen
+## Owner-Menü
 
-- Kategorien über Telegram erstellen
-- Bilder mit oder ohne Bildunterschrift hochladen
-- Kategorien aktivieren, umbenennen und löschen
-- Bilder umbenennen, ersetzen und löschen
-- 2 bis 10 Bilder pro Kategorie
-- Auswahl einer bestimmten Kategorie in der Gruppe
-- Dark-Mode-Mini-App
-- Ergebnis wird wieder in die ursprüngliche Gruppe gesendet
-
-## Upgrade deines vorhandenen Projekts
-
-1. ZIP entpacken.
-2. Den gesamten Inhalt in dein bestehendes GitHub-Repository hochladen und vorhandene Dateien ersetzen.
-3. `Commit changes` anklicken.
-4. Vercel erstellt automatisch ein neues Deployment.
-5. Falls nicht: Vercel → Deployments → Redeploy. Build Cache deaktiviert lassen.
-6. Warten, bis der Status `Ready` lautet.
-
-Deine bestehenden Vercel-Variablen bleiben unverändert:
-
-- `TELEGRAM_BOT_TOKEN`
-- `NEXT_PUBLIC_APP_URL`
-- `WEBHOOK_SECRET`
-- `ADMIN_TELEGRAM_USER_ID`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-## Supabase aktualisieren
-
-Öffne Supabase → SQL Editor. Kopiere den vollständigen Inhalt von `supabase.sql` hinein und klicke auf `Run`.
-
-Das Skript ist wiederholbar und ergänzt nur die neuen Spalten. Vorhandene Kategorien und Bilder bleiben erhalten.
-
-## Bedienung im privaten Bot-Chat
-
-### Kategorie erstellen
+Im privaten Chat:
 
 ```text
-/neuekategorie Influencer
+/rollen
 ```
 
-Danach ein Bild senden. Es gibt zwei Varianten:
+Funktionen:
 
-1. Bild ohne Bildunterschrift senden → Bot fragt nach dem Namen.
-2. Bild mit Bildunterschrift senden → die Bildunterschrift wird direkt als Name gespeichert.
+- Creator-Token mit Kontingent erstellen
+- Creator per Telegram-ID und Kontingent genehmigen
+- Creator und Verbrauch anzeigen
+- offene Tokens anzeigen
+- Kontingent ändern
+- Creator sperren
 
-Nach mindestens zwei Bildern:
+## Creator
+
+Token einlösen:
 
 ```text
-/fertig
+/aktivieren BR-XXXX-XXXX-XXXX
 ```
 
-### Kategorien verwalten
+Eigenes Kontingent anzeigen:
 
 ```text
-/kategorien
+/meinkonto
 ```
 
-Danach erscheinen Schaltflächen für:
+## Update installieren
 
-- Aktivieren
-- Bild hinzufügen
-- Bilder verwalten
-- Kategorie umbenennen
-- Kategorie löschen
+1. `supabase.sql` vollständig im Supabase SQL Editor ausführen.
+2. Danach den gesamten Projektinhalt in das bestehende GitHub-Repository hochladen und Dateien ersetzen.
+3. Änderungen committen.
+4. Vercel neu deployen lassen; Build-Cache beim manuellen Redeploy deaktivieren.
+5. Webhook und vorhandene Environment Variables bleiben unverändert.
 
-Unter „Bilder verwalten“ kann jeder Eintrag umbenannt, ersetzt oder gelöscht werden.
+## Vorhandene Creator
 
-### Aktuelle Eingabe abbrechen
-
-```text
-/abbrechen
-```
-
-## Spiel in der Gruppe
-
-Aktive Kategorie starten:
-
-```text
-/blindranking
-```
-
-Bestimmte Kategorie starten:
-
-```text
-/blindranking Influencer
-```
-
-## Test nach dem Deployment
-
-1. Im privaten Chat `/neuekategorie Test` senden.
-2. Ein Bild senden.
-3. Einen Namen senden.
-4. Der Bot muss jetzt mit `hinzugefügt` antworten.
-5. Zweites Bild hinzufügen.
-6. `/fertig` senden.
-7. In der Gruppe `/blindranking` senden.
-
-## Sicherheit
-
-Bot-Token, Webhook-Secret und Supabase-Secret-Key niemals in GitHub, Screenshots oder Chats veröffentlichen. Bereits veröffentlichte Bot-Tokens müssen bei BotFather mit `/revoke` ersetzt werden.
-
-## Änderung: vollständige Bilder und Ranking-Album
-
-- Die Mini App zeigt hochformatige und querformatige Bilder vollständig mit `object-fit: contain` an.
-- Beim Teilen sendet der Bot alle Ranking-Bilder als Telegram-Album in der gewählten Reihenfolge.
-
-## Befehlsübersicht
-
-Mit `/commands` zeigt der Bot alle verfügbaren Befehle und ein Button-Menü an.
-
-- `/blindranking` – aktive Kategorie starten
-- `/blindranking Kategorie` – bestimmte Kategorie starten
-- `/neuekategorie Name` – Kategorie erstellen
-- `/kategorien` – Kategorien verwalten
-- `/bearbeiten Kategorie` – Kategorie direkt öffnen
-- `/loeschen Kategorie` – Kategorie mit Sicherheitsabfrage löschen
-- `/fertig` – Bearbeitung abschließen und aktivieren
-- `/abbrechen` – aktuelle Eingabe abbrechen
-- `/commands` – Hilfe und Schnellzugriff anzeigen
-
-## Update 2.2 – Bilder/Text, bis zu 30 Einträge und Stimmenverteilung
-
-Vor dem Deployment den aktualisierten Inhalt von `supabase.sql` einmal im Supabase SQL Editor ausführen. Die Befehle sind migrationssicher (`if not exists`).
-
-In `/kategorien` → Kategorie auswählen kann eingestellt werden:
-
-- **Ergebnis mit Bildern:** zuerst Bilder/Alben, danach eine separate Textnachricht.
-- **Ergebnis ohne Bilder:** nur die Textnachricht.
-
-Telegram erlaubt pro Album höchstens 10 Bilder. Kategorien dürfen nun bis zu 30 Einträge enthalten; größere Rankings werden automatisch in mehrere Alben aufgeteilt.
-
-Pro Nutzer, Gruppe und Kategorie wird eine Stimme gespeichert. Eine erneute Abgabe ersetzt die vorherige Stimme. Nach dem Absenden zeigt die Textnachricht zusätzlich die aggregierte Platzverteilung der anderen Nutzer in derselben Gruppe.
-
-## Update 2.4 – getrennte Fremdstimmen und Statistik
-
-Nach einer Abstimmung zeigt die Gruppen-Nachricht zuerst das persönliche Ranking. Darunter folgt getrennt die Platzverteilung ausschließlich der anderen Nutzer in derselben Gruppe.
-
-Neuer Gruppenbefehl:
-
-```text
-/statistik Kategoriename
-```
-
-Er zeigt für die angegebene Kategorie das gesamte Wahlverhalten dieser Gruppe: pro Eintrag die prozentuale Verteilung über alle belegten Plätze. Der Befehl muss in der betreffenden Gruppe ausgeführt werden.
-
-
-## Änderung V2.6
-
-Die normale Ergebnisnachricht zeigt nur das persönliche Ranking. Punktwerte, Prozentwerte und das Gesamtranking werden ausschließlich mit `/statistik <Kategoriename>` angezeigt.
-
-## Version 2.7 – Community-Auswertung und neue Befehle
-
-Nach jeder Abstimmung sendet der Bot:
-
-1. optional zuerst alle Ergebnisbilder,
-2. das persönliche Ranking,
-3. das Community-Ranking der anderen Nutzer in Prozent,
-4. die prozentuale Übereinstimmung mit der Community.
-
-Neue Gruppenbefehle:
-
-- `/statistik Kategoriename` – ausführliche Punktewertung, Platzverteilung und Community-Badges
-- `/top` – meistgespielte Kategorien über alle Gruppen
-- `/leaderboard` – aktivste Spieler der aktuellen Gruppe
-- `/history` – letzte Abstimmungen der aktuellen Gruppe
-- `/commands` – vollständige Befehlsübersicht
-
-Die Statistik verwendet weiterhin das abgestufte Punktesystem: Bei N Einträgen erhält Platz 1 N Punkte und der letzte Platz 1 Punkt.
+Bereits gespeicherte Creator werden durch das SQL-Update auf **unbegrenzt** gesetzt. Ihre bisher erstellten Kategorien werden als Verbrauch erfasst.

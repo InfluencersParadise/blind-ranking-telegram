@@ -71,3 +71,58 @@ create table if not exists vote_entries (
 
 alter table game_votes enable row level security;
 alter table vote_entries enable row level security;
+
+-- Version 2.8: getrennte Telegram-Forenthemen für Umfrage-Link und Ergebnisse
+create table if not exists group_topic_settings (
+  chat_id bigint primary key,
+  poll_thread_id bigint,
+  results_thread_id bigint,
+  updated_at timestamptz not null default now()
+);
+
+alter table group_topic_settings enable row level security;
+
+
+-- Version 3.0: Rollen- und Tokenverwaltung
+create table if not exists bot_users (
+  user_id bigint primary key,
+  role text not null check (role in ('owner','creator','player')),
+  username text,
+  display_name text,
+  active boolean not null default true,
+  approved_by bigint,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists invite_tokens (
+  id uuid primary key default gen_random_uuid(),
+  token_hash text not null unique,
+  token_hint text not null,
+  role text not null check (role in ('creator','player')),
+  created_by bigint not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz,
+  used_by bigint,
+  used_at timestamptz,
+  revoked_at timestamptz
+);
+
+alter table bot_users enable row level security;
+alter table invite_tokens enable row level security;
+
+-- Version 3.1: Player sind öffentlich; Creator erhalten Kategorienkontingente
+alter table bot_users add column if not exists category_limit integer check (category_limit is null or category_limit > 0);
+alter table bot_users add column if not exists categories_used integer not null default 0 check (categories_used >= 0);
+alter table invite_tokens add column if not exists category_limit integer check (category_limit is null or category_limit > 0);
+
+-- Bestehende aktive Creator werden aus Kompatibilitätsgründen unbegrenzt geführt.
+update bot_users
+set category_limit = null,
+    categories_used = greatest(categories_used, (
+      select count(*)::integer from categories where categories.created_by = bot_users.user_id
+    ))
+where role = 'creator';
+
+-- Alte Player-Freigaben werden nicht mehr benötigt; Player sind automatisch alle Nutzer.
+update bot_users set active = false where role = 'player';

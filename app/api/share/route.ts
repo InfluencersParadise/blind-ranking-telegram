@@ -40,14 +40,15 @@ async function telegramApi(token: string, method: string, payload: unknown) {
   return data.result;
 }
 
-async function sendImagesFirst(token: string, chatId: string, urls: string[]) {
+async function sendImagesFirst(token: string, chatId: string, urls: string[], threadId?: number | null) {
   for (let offset = 0; offset < urls.length; offset += 10) {
     const chunk = urls.slice(offset, offset + 10);
     if (chunk.length === 1) {
-      await telegramApi(token, "sendPhoto", { chat_id: chatId, photo: chunk[0] });
+      await telegramApi(token, "sendPhoto", { chat_id: chatId, photo: chunk[0], ...(threadId ? { message_thread_id: threadId } : {}) });
     } else {
       await telegramApi(token, "sendMediaGroup", {
         chat_id: chatId,
+        ...(threadId ? { message_thread_id: threadId } : {}),
         media: chunk.map((url) => ({ type: "photo", media: url }))
       });
     }
@@ -105,6 +106,14 @@ export async function POST(request: NextRequest) {
   if (!userId) return NextResponse.json({ error: "Telegram-Nutzer-ID fehlt." }, { status: 400 });
 
   const supabase = getSupabaseAdmin();
+  const { data: topicSettings, error: topicSettingsError } = await supabase
+    .from("group_topic_settings")
+    .select("results_thread_id")
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  if (topicSettingsError) throw topicSettingsError;
+  const resultsThreadId = topicSettings?.results_thread_id ?? null;
+
   const itemIds = ranking.map((entry) => entry.itemId);
   const [{ data: items, error: itemError }, { data: category, error: categoryError }] = await Promise.all([
     supabase.from("items").select("id,title,image_url,category_id").eq("category_id", categoryId).in("id", itemIds),
@@ -194,7 +203,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (category.send_images !== false) {
-      await sendImagesFirst(botToken, chatId, orderedItems.map((item) => item.image_url));
+      await sendImagesFirst(botToken, chatId, orderedItems.map((item) => item.image_url), resultsThreadId);
     }
 
     const rankingText = ranking
@@ -206,7 +215,7 @@ export async function POST(request: NextRequest) {
 
     let text = `🏆 <b>${escapeHtml(category.name)}</b> – Ranking von ${escapeHtml(player)}\n\n${rankingText}${communityText}${agreementText}`;
     if (text.length > 4090) text = text.slice(0, 4050) + "\n…";
-    await telegramApi(botToken, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
+    await telegramApi(botToken, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...(resultsThreadId ? { message_thread_id: resultsThreadId } : {}) });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Share failed:", error);
