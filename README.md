@@ -142,9 +142,38 @@ Telegram erlaubt pro Album höchstens 10 Bilder. Kategorien dürfen nun bis zu 3
 
 Pro Nutzer, Gruppe und Kategorie wird eine Stimme gespeichert. Eine erneute Abgabe ersetzt die vorherige Stimme. Nach dem Absenden zeigt die Textnachricht zusätzlich die aggregierte Platzverteilung der anderen Nutzer in derselben Gruppe.
 
-## Version 2.3 – Einmalige Abstimmung
+## Update 2.4 – getrennte Fremdstimmen und Statistik
 
-- Jeder Telegram-Nutzer darf pro Gruppe und Kategorie nur einmal abstimmen.
-- Beim erneuten Öffnen wird das bereits gespeicherte Ranking angezeigt.
-- In der Ergebnisnachricht steht je Rang nur der Platz und der Anteil aller Stimmen, die den jeweiligen Eintrag auf Platz 1 gesetzt haben.
-- Für dieses Update ist keine neue SQL-Migration nötig; der vorhandene Unique-Constraint in `game_votes` erzwingt die Einmaligkeit zusätzlich auf Datenbankebene.
+Nach einer Abstimmung zeigt die Gruppen-Nachricht zuerst das persönliche Ranking. Darunter folgt getrennt die Platzverteilung ausschließlich der anderen Nutzer in derselben Gruppe.
+
+Neuer Gruppenbefehl:
+
+```text
+/statistik Kategoriename
+```
+
+Er zeigt für die angegebene Kategorie das gesamte Wahlverhalten dieser Gruppe: pro Eintrag die prozentuale Verteilung über alle belegten Plätze. Der Befehl muss in der betreffenden Gruppe ausgeführt werden.
+
+
+## Änderung V2.6
+
+Die normale Ergebnisnachricht zeigt nur das persönliche Ranking. Punktwerte, Prozentwerte und das Gesamtranking werden ausschließlich mit `/statistik <Kategoriename>` angezeigt.
+
+## Version 2.7 – Community-Auswertung und neue Befehle
+
+Nach jeder Abstimmung sendet der Bot:
+
+1. optional zuerst alle Ergebnisbilder,
+2. das persönliche Ranking,
+3. das Community-Ranking der anderen Nutzer in Prozent,
+4. die prozentuale Übereinstimmung mit der Community.
+
+Neue Gruppenbefehle:
+
+- `/statistik Kategoriename` – ausführliche Punktewertung, Platzverteilung und Community-Badges
+- `/top` – meistgespielte Kategorien über alle Gruppen
+- `/leaderboard` – aktivste Spieler der aktuellen Gruppe
+- `/history` – letzte Abstimmungen der aktuellen Gruppe
+- `/commands` – vollständige Befehlsübersicht
+
+Die Statistik verwendet weiterhin das abgestufte Punktesystem: Bei N Einträgen erhält Platz 1 N Punkte und der letzte Platz 1 Punkt.

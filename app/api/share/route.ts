@@ -4,6 +4,9 @@ import { getSupabaseAdmin } from "../../../lib/supabase";
 
 const MAX_ITEMS = 30;
 
+type RankingEntry = { position: number; itemId: string; title: string };
+type ItemRow = { id: string; title: string; image_url: string; category_id: string };
+
 function validateTelegramInitData(initData: string, botToken: string): boolean {
   if (!initData) return false;
   const params = new URLSearchParams(initData);
@@ -12,7 +15,10 @@ function validateTelegramInitData(initData: string, botToken: string): boolean {
   params.delete("hash");
   const authDate = Number(params.get("auth_date"));
   if (!authDate || Date.now() / 1000 - authDate > 3600) return false;
-  const dataCheckString = [...params.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("\n");
+  const dataCheckString = [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
   const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
   const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
   if (receivedHash.length !== calculatedHash.length) return false;
@@ -25,7 +31,9 @@ function escapeHtml(value: string) {
 
 async function telegramApi(token: string, method: string, payload: unknown) {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.description || `Telegram-Fehler in ${method}`);
@@ -35,23 +43,54 @@ async function telegramApi(token: string, method: string, payload: unknown) {
 async function sendImagesFirst(token: string, chatId: string, urls: string[]) {
   for (let offset = 0; offset < urls.length; offset += 10) {
     const chunk = urls.slice(offset, offset + 10);
-    if (chunk.length === 1) await telegramApi(token, "sendPhoto", { chat_id: chatId, photo: chunk[0] });
-    else await telegramApi(token, "sendMediaGroup", { chat_id: chatId, media: chunk.map((url) => ({ type: "photo", media: url })) });
+    if (chunk.length === 1) {
+      await telegramApi(token, "sendPhoto", { chat_id: chatId, photo: chunk[0] });
+    } else {
+      await telegramApi(token, "sendMediaGroup", {
+        chat_id: chatId,
+        media: chunk.map((url) => ({ type: "photo", media: url }))
+      });
+    }
   }
+}
+
+function agreementPercent(userRanking: RankingEntry[], communityOrder: string[]): number {
+  const count = userRanking.length;
+  if (count < 2 || communityOrder.length !== count) return 0;
+  const communityPosition = new Map(communityOrder.map((itemId, index) => [itemId, index + 1]));
+  const distance = userRanking.reduce((sum, entry) => {
+    const comparison = communityPosition.get(entry.itemId) ?? entry.position;
+    return sum + Math.abs(entry.position - comparison);
+  }, 0);
+  const maximumDistance = Math.floor((count * count) / 2);
+  if (!maximumDistance) return 100;
+  return Math.max(0, Math.min(100, Math.round((1 - distance / maximumDistance) * 100)));
 }
 
 export async function POST(request: NextRequest) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) return NextResponse.json({ error: "Bot-Token fehlt." }, { status: 500 });
+
   const body = await request.json();
   const { initData, chatId, categoryId, ranking } = body as {
-    initData?: string; chatId?: string | null; categoryId?: string | null;
-    ranking?: Array<{ position: number; itemId: string; title: string }>;
+    initData?: string;
+    chatId?: string | null;
+    categoryId?: string | null;
+    ranking?: RankingEntry[];
   };
-  if (!validateTelegramInitData(initData ?? "", botToken)) return NextResponse.json({ error: "Telegram-Anmeldung ist ungültig oder abgelaufen." }, { status: 401 });
+
+  if (!validateTelegramInitData(initData ?? "", botToken)) {
+    return NextResponse.json({ error: "Telegram-Anmeldung ist ungültig oder abgelaufen." }, { status: 401 });
+  }
   if (!chatId || !/^-?\d+$/.test(chatId)) return NextResponse.json({ error: "Gruppen-ID fehlt." }, { status: 400 });
   if (!categoryId) return NextResponse.json({ error: "Kategorie-ID fehlt." }, { status: 400 });
-  if (!Array.isArray(ranking) || ranking.length < 2 || ranking.length > MAX_ITEMS || ranking.some((e, i) => e.position !== i + 1 || !e.itemId || !e.title)) {
+  if (
+    !Array.isArray(ranking) ||
+    ranking.length < 2 ||
+    ranking.length > MAX_ITEMS ||
+    ranking.some((entry, index) => entry.position !== index + 1 || !entry.itemId || !entry.title) ||
+    new Set(ranking.map((entry) => entry.itemId)).size !== ranking.length
+  ) {
     return NextResponse.json({ error: "Ranking ist ungültig." }, { status: 400 });
   }
 
@@ -74,10 +113,11 @@ export async function POST(request: NextRequest) {
   if (itemError || categoryError || !items || items.length !== ranking.length) {
     return NextResponse.json({ error: "Kategorie oder Bilder konnten nicht geladen werden." }, { status: 500 });
   }
-  const byId = new Map(items.map((item) => [item.id, item]));
+
+  const typedItems = items as ItemRow[];
+  const byId = new Map(typedItems.map((item) => [item.id, item]));
   const orderedItems = ranking.map((entry) => byId.get(entry.itemId)!).filter(Boolean);
 
-  // Pro Nutzer, Gruppe und Kategorie ist exakt eine Stimme erlaubt.
   const { data: existingVote, error: existingError } = await supabase
     .from("game_votes")
     .select("id")
@@ -105,34 +145,69 @@ export async function POST(request: NextRequest) {
     throw voteEntryError;
   }
 
-  const { data: allVotes, error: allVotesError } = await supabase
-    .from("game_votes")
-    .select("id")
-    .eq("category_id", categoryId)
-    .eq("chat_id", chatId);
-  if (allVotesError) throw allVotesError;
-  const allVoteIds = (allVotes ?? []).map((entry) => entry.id);
-  let firstPlaceEntries: Array<{ item_id: string }> = [];
-  if (allVoteIds.length) {
-    const { data, error } = await supabase.from("vote_entries").select("item_id").in("vote_id", allVoteIds).eq("position", 1);
-    if (error) throw error;
-    firstPlaceEntries = data ?? [];
-  }
-  const firstCounts = new Map<string, number>();
-  for (const entry of firstPlaceEntries) firstCounts.set(entry.item_id, (firstCounts.get(entry.item_id) ?? 0) + 1);
-  const totalVotes = allVoteIds.length;
-
   try {
-    if (category.send_images !== false) await sendImagesFirst(botToken, chatId, orderedItems.map((item) => item.image_url));
-    const rankingText = ranking.map((entry) => {
-      const title = byId.get(entry.itemId)?.title ?? entry.title;
-      const percent = totalVotes ? Math.round(((firstCounts.get(entry.itemId) ?? 0) / totalVotes) * 100) : 0;
-      return `${entry.position}. <b>${escapeHtml(title)}</b> — ${percent}% auf Platz 1`;
-    }).join("\n");
-    let text = `🏆 <b>${escapeHtml(category.name)}</b> – Ranking von ${escapeHtml(player)}\n\n${rankingText}\n\n📊 Grundlage: ${totalVotes} ${totalVotes === 1 ? "Stimme" : "Stimmen"}`;
+    const { data: otherVotes, error: otherVotesError } = await supabase
+      .from("game_votes")
+      .select("id")
+      .eq("category_id", categoryId)
+      .eq("chat_id", chatId)
+      .neq("user_id", userId);
+    if (otherVotesError) throw otherVotesError;
+
+    const otherVoteIds = (otherVotes ?? []).map((entry) => entry.id);
+    let communityText = "";
+    let agreementText = "";
+
+    if (otherVoteIds.length > 0) {
+      const { data: otherEntries, error: otherEntriesError } = await supabase
+        .from("vote_entries")
+        .select("item_id,position")
+        .in("vote_id", otherVoteIds);
+      if (otherEntriesError) throw otherEntriesError;
+
+      const itemCount = ranking.length;
+      const maxPointsPerItem = itemCount * otherVoteIds.length;
+      const pointsByItem = new Map<string, number>();
+      for (const entry of otherEntries ?? []) {
+        const points = Math.max(1, itemCount - entry.position + 1);
+        pointsByItem.set(entry.item_id, (pointsByItem.get(entry.item_id) ?? 0) + points);
+      }
+
+      const community = typedItems
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          points: pointsByItem.get(item.id) ?? 0
+        }))
+        .sort((a, b) => b.points - a.points || a.title.localeCompare(b.title, "de"));
+
+      const communityLines = community.map((item, index) => {
+        const percentage = maxPointsPerItem > 0 ? Math.round((item.points / maxPointsPerItem) * 100) : 0;
+        return `${index + 1}. <b>${escapeHtml(item.title)}</b> — ${percentage}%`;
+      });
+      communityText = `\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\n${otherVoteIds.length} ${otherVoteIds.length === 1 ? "andere Stimme" : "andere Stimmen"}\n\n${communityLines.join("\n")}`;
+
+      const agreement = agreementPercent(ranking, community.map((item) => item.id));
+      agreementText = `\n\n🤝 <b>Deine Übereinstimmung mit der Community</b>\n${agreement}%`;
+    } else {
+      communityText = "\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\nDu bist die erste Stimme in dieser Gruppe.";
+    }
+
+    if (category.send_images !== false) {
+      await sendImagesFirst(botToken, chatId, orderedItems.map((item) => item.image_url));
+    }
+
+    const rankingText = ranking
+      .map((entry) => {
+        const title = byId.get(entry.itemId)?.title ?? entry.title;
+        return `${entry.position}. <b>${escapeHtml(title)}</b>`;
+      })
+      .join("\n");
+
+    let text = `🏆 <b>${escapeHtml(category.name)}</b> – Ranking von ${escapeHtml(player)}\n\n${rankingText}${communityText}${agreementText}`;
     if (text.length > 4090) text = text.slice(0, 4050) + "\n…";
     await telegramApi(botToken, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
-    return NextResponse.json({ ok: true, totalVotes });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Share failed:", error);
     return NextResponse.json({ error: error instanceof Error ? error.message : "Telegram konnte das Ranking nicht senden." }, { status: 502 });

@@ -153,6 +153,10 @@ async function sendCommands(token: string, chatId: string | number, isAdmin: boo
       "<b>🎮 Spiel</b>\n" +
       "<code>/blindranking</code> – aktive Kategorie starten\n" +
       "<code>/blindranking Kategorie</code> – bestimmte Kategorie starten\n" +
+      "<code>/statistik Kategoriename</code> – ausführliche Punkte- und Platzstatistik\n" +
+      "<code>/top</code> – meistgespielte Kategorien anzeigen\n" +
+      "<code>/leaderboard</code> – aktivste Spieler dieser Gruppe anzeigen\n" +
+      "<code>/history</code> – letzte Abstimmungen dieser Gruppe anzeigen\n" +
       "<code>/commands</code> – diese Übersicht anzeigen" +
       adminSection,
     { reply_markup: { inline_keyboard: keyboard } }
@@ -322,6 +326,188 @@ async function handleCallback(token: string, callback: CallbackQuery, adminId: n
   }
 }
 
+
+function relativeTime(value: string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return "gerade eben";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `vor ${minutes} Min.`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `vor ${hours} Std.`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `vor ${days} ${days === 1 ? "Tag" : "Tagen"}`;
+  return new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(new Date(value));
+}
+
+async function sendTopCategories(token: string, chatId: string) {
+  const supabase = getSupabaseAdmin();
+  const [{ data: votes, error: votesError }, { data: categories, error: categoryError }] = await Promise.all([
+    supabase.from("game_votes").select("category_id"),
+    supabase.from("categories").select("id,name")
+  ]);
+  if (votesError) throw votesError;
+  if (categoryError) throw categoryError;
+  if (!votes?.length) {
+    await send(token, chatId, "🏆 Noch keine Kategorien wurden bewertet.");
+    return;
+  }
+  const counts = new Map<string, number>();
+  for (const vote of votes) counts.set(vote.category_id, (counts.get(vote.category_id) ?? 0) + 1);
+  const names = new Map((categories ?? []).map((category) => [category.id, category.name]));
+  const ranking = [...counts.entries()]
+    .map(([id, count]) => ({ id, count, name: names.get(id) ?? "Gelöschte Kategorie" }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "de"))
+    .slice(0, 10);
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = ranking.map((entry, index) => `${medals[index] ?? `${index + 1}.`} <b>${escapeHtml(entry.name)}</b> — ${entry.count} ${entry.count === 1 ? "Vote" : "Votes"}`);
+  await send(token, chatId, `<b>🏆 Top Kategorien</b>\n\n${lines.join("\n")}`);
+}
+
+async function sendLeaderboard(token: string, chatId: string) {
+  const supabase = getSupabaseAdmin();
+  const { data: votes, error } = await supabase
+    .from("game_votes")
+    .select("user_id,player_name")
+    .eq("chat_id", chatId);
+  if (error) throw error;
+  if (!votes?.length) {
+    await send(token, chatId, "🏅 In dieser Gruppe gibt es noch keine Abstimmungen.");
+    return;
+  }
+  const players = new Map<number, { name: string; count: number }>();
+  for (const vote of votes) {
+    const current = players.get(Number(vote.user_id));
+    players.set(Number(vote.user_id), { name: vote.player_name || current?.name || "Unbekannt", count: (current?.count ?? 0) + 1 });
+  }
+  const ranking = [...players.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "de")).slice(0, 15);
+  const lines = ranking.map((entry, index) => `${index + 1}. <b>${escapeHtml(entry.name)}</b> — ${entry.count} ${entry.count === 1 ? "Ranking" : "Rankings"}`);
+  await send(token, chatId, `<b>🏅 Aktivste Spieler</b>\n\n${lines.join("\n")}`);
+}
+
+async function sendHistory(token: string, chatId: string) {
+  const supabase = getSupabaseAdmin();
+  const { data: votes, error } = await supabase
+    .from("game_votes")
+    .select("category_id,player_name,created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: false })
+    .limit(15);
+  if (error) throw error;
+  if (!votes?.length) {
+    await send(token, chatId, "📜 In dieser Gruppe gibt es noch keine Abstimmungen.");
+    return;
+  }
+  const categoryIds = [...new Set(votes.map((vote) => vote.category_id))];
+  const { data: categories, error: categoryError } = await supabase.from("categories").select("id,name").in("id", categoryIds);
+  if (categoryError) throw categoryError;
+  const names = new Map((categories ?? []).map((category) => [category.id, category.name]));
+  const lines = votes.map((vote, index) => `${index + 1}. <b>${escapeHtml(names.get(vote.category_id) ?? "Gelöschte Kategorie")}</b> — ${escapeHtml(vote.player_name)} · ${relativeTime(vote.created_at)}`);
+  await send(token, chatId, `<b>📜 Letzte Abstimmungen</b>\n\n${lines.join("\n")}`);
+}
+
+
+async function sendStatistics(token: string, chatId: string, categoryName: string) {
+  const category = await findCategoryByName(categoryName);
+  if (!category) {
+    await send(token, chatId, "Kategorie nicht gefunden. Beispiel: <code>/statistik Test</code>");
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  const [{ data: votes, error: votesError }, { data: items, error: itemsError }] = await Promise.all([
+    supabase.from("game_votes").select("id").eq("category_id", category.id).eq("chat_id", chatId),
+    supabase.from("items").select("id,title,position").eq("category_id", category.id).order("position", { ascending: true })
+  ]);
+  if (votesError) throw votesError;
+  if (itemsError) throw itemsError;
+
+  const voteIds = (votes ?? []).map((vote) => vote.id);
+  if (!voteIds.length) {
+    await send(token, chatId, `📊 Für <b>${escapeHtml(category.name)}</b> gibt es in dieser Gruppe noch keine Stimmen.`);
+    return;
+  }
+
+  const { data: entries, error: entriesError } = await supabase
+    .from("vote_entries")
+    .select("item_id,position")
+    .in("vote_id", voteIds);
+  if (entriesError) throw entriesError;
+
+  const itemCount = (items ?? []).length;
+  const pointsByItem = new Map<string, number>();
+  const positionCounts = new Map<string, Map<number, number>>();
+  for (const entry of entries ?? []) {
+    const points = Math.max(1, itemCount - entry.position + 1);
+    pointsByItem.set(entry.item_id, (pointsByItem.get(entry.item_id) ?? 0) + points);
+    const counts = positionCounts.get(entry.item_id) ?? new Map<number, number>();
+    counts.set(entry.position, (counts.get(entry.position) ?? 0) + 1);
+    positionCounts.set(entry.item_id, counts);
+  }
+
+  const maxPoints = itemCount * voteIds.length;
+  const rankedItems = (items ?? [])
+    .map((item) => ({
+      ...item,
+      points: pointsByItem.get(item.id) ?? 0,
+      firstPlaceCount: positionCounts.get(item.id)?.get(1) ?? 0
+    }))
+    .sort((a, b) => b.points - a.points || b.firstPlaceCount - a.firstPlaceCount || a.title.localeCompare(b.title, "de"));
+
+  const scoreLines = rankedItems.map((item, index) => {
+    const percentage = maxPoints > 0 ? Math.round((item.points / maxPoints) * 100) : 0;
+    return `${index + 1}. <b>${escapeHtml(item.title)}</b> — ${item.points}/${maxPoints} Punkte (${percentage}%)`;
+  });
+
+  const distributionBlocks = rankedItems.map((item) => {
+    const counts = positionCounts.get(item.id) ?? new Map<number, number>();
+    const parts: string[] = [];
+    for (let position = 1; position <= itemCount; position += 1) {
+      const count = counts.get(position) ?? 0;
+      if (count > 0) parts.push(`#${position} ${Math.round((count / voteIds.length) * 100)}%`);
+    }
+    return `<b>${escapeHtml(item.title)}</b>\n${parts.join(" · ") || "Keine Platzierungen"}`;
+  });
+
+  const favorite = rankedItems[0];
+  const firstPick = [...rankedItems].sort((a, b) => b.firstPlaceCount - a.firstPlaceCount || b.points - a.points)[0];
+  const controversial = [...rankedItems]
+    .map((item) => {
+      const counts = positionCounts.get(item.id) ?? new Map<number, number>();
+      const mean = [...counts.entries()].reduce((sum, [position, count]) => sum + position * count, 0) / voteIds.length;
+      const variance = [...counts.entries()].reduce((sum, [position, count]) => sum + ((position - mean) ** 2) * count, 0) / voteIds.length;
+      return { ...item, variance };
+    })
+    .sort((a, b) => b.variance - a.variance)[0];
+  const surprise = [...rankedItems]
+    .map((item, communityIndex) => ({ ...item, gain: item.position - (communityIndex + 1) }))
+    .sort((a, b) => b.gain - a.gain || b.points - a.points)[0];
+
+  const badges = [
+    favorite ? `👑 <b>Community-Favorit:</b> ${escapeHtml(favorite.title)}` : "",
+    firstPick ? `❤️ <b>Häufigster #1 Pick:</b> ${escapeHtml(firstPick.title)} (${Math.round((firstPick.firstPlaceCount / voteIds.length) * 100)}%)` : "",
+    controversial ? `😈 <b>Kontrovers:</b> ${escapeHtml(controversial.title)}` : "",
+    surprise && surprise.gain > 0 ? `🔥 <b>Überraschung:</b> ${escapeHtml(surprise.title)} (+${surprise.gain} Plätze gegenüber der Ausgangsreihenfolge)` : ""
+  ].filter(Boolean).join("\n");
+
+  const sections = [
+    `📊 <b>Statistik: ${escapeHtml(category.name)}</b>\n\n👥 ${voteIds.length} ${voteIds.length === 1 ? "Stimme" : "Stimmen"}\n📝 ${itemCount} Einträge\nPlatz 1 erhält ${itemCount} Punkte, der letzte Platz 1 Punkt.\nMaximal ${maxPoints} Punkte je Eintrag.`,
+    `🏆 <b>Punktewertung</b>\n\n${scoreLines.join("\n")}`,
+    `📈 <b>Platzverteilung</b>\n\n${distributionBlocks.join("\n\n")}`,
+    badges ? `🏅 <b>Community-Badges</b>\n\n${badges}` : ""
+  ].filter(Boolean);
+
+  for (const section of sections) {
+    let remaining = section;
+    while (remaining.length > 3900) {
+      let splitAt = remaining.lastIndexOf("\n", 3900);
+      if (splitAt < 1000) splitAt = 3900;
+      await send(token, chatId, remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt).replace(/^\n+/, "");
+    }
+    if (remaining) await send(token, chatId, remaining);
+  }
+}
+
 export async function POST(request: NextRequest) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
@@ -355,6 +541,43 @@ export async function POST(request: NextRequest) {
 
     if (["/commands", "/help", "/hilfe"].includes(command)) {
       await sendCommands(token, chatId, isPrivate && userId === adminId);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (command === "/top") {
+      await sendTopCategories(token, chatId);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (command === "/leaderboard") {
+      if (isPrivate) {
+        await send(token, chatId, "Nutze <code>/leaderboard</code> direkt in einer Telegram-Gruppe.");
+      } else {
+        await sendLeaderboard(token, chatId);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/history", "/verlauf"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Nutze <code>/history</code> direkt in einer Telegram-Gruppe.");
+      } else {
+        await sendHistory(token, chatId);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (["/statistik", "/statistics"].includes(command)) {
+      if (isPrivate) {
+        await send(token, chatId, "Nutze <code>/statistik Kategoriename</code> direkt in der Telegram-Gruppe, deren Stimmen du auswerten möchtest.");
+        return NextResponse.json({ ok: true });
+      }
+      const name = commandArg(text);
+      if (!name) {
+        await send(token, chatId, "Bitte so senden: <code>/statistik Kategoriename</code>");
+        return NextResponse.json({ ok: true });
+      }
+      await sendStatistics(token, chatId, name);
       return NextResponse.json({ ok: true });
     }
 
