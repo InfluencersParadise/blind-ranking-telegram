@@ -155,29 +155,29 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { data: otherVotes, error: otherVotesError } = await supabase
+    const { data: communityVotes, error: communityVotesError } = await supabase
       .from("game_votes")
       .select("id")
       .eq("category_id", categoryId)
-      .eq("chat_id", chatId)
-      .neq("user_id", userId);
-    if (otherVotesError) throw otherVotesError;
+      .eq("chat_id", chatId);
+    if (communityVotesError) throw communityVotesError;
 
-    const otherVoteIds = (otherVotes ?? []).map((entry) => entry.id);
+    // Das Community-Ranking enthält ausdrücklich auch die soeben abgegebene Stimme.
+    const communityVoteIds = (communityVotes ?? []).map((entry) => entry.id);
     let communityText = "";
     let agreementText = "";
 
-    if (otherVoteIds.length > 0) {
-      const { data: otherEntries, error: otherEntriesError } = await supabase
+    if (communityVoteIds.length > 0) {
+      const { data: communityEntries, error: communityEntriesError } = await supabase
         .from("vote_entries")
         .select("item_id,position")
-        .in("vote_id", otherVoteIds);
-      if (otherEntriesError) throw otherEntriesError;
+        .in("vote_id", communityVoteIds);
+      if (communityEntriesError) throw communityEntriesError;
 
       const itemCount = ranking.length;
-      const maxPointsPerItem = itemCount * otherVoteIds.length;
+      const maxPointsPerItem = itemCount * communityVoteIds.length;
       const pointsByItem = new Map<string, number>();
-      for (const entry of otherEntries ?? []) {
+      for (const entry of communityEntries ?? []) {
         const points = Math.max(1, itemCount - entry.position + 1);
         pointsByItem.set(entry.item_id, (pointsByItem.get(entry.item_id) ?? 0) + points);
       }
@@ -194,12 +194,10 @@ export async function POST(request: NextRequest) {
         const percentage = maxPointsPerItem > 0 ? Math.round((item.points / maxPointsPerItem) * 100) : 0;
         return `${index + 1}. <b>${escapeHtml(item.title)}</b> — ${percentage}%`;
       });
-      communityText = `\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\n${otherVoteIds.length} ${otherVoteIds.length === 1 ? "andere Stimme" : "andere Stimmen"}\n\n${communityLines.join("\n")}`;
+      communityText = `\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\n${communityVoteIds.length} ${communityVoteIds.length === 1 ? "Stimme" : "Stimmen"} inklusive deiner Stimme\n\n${communityLines.join("\n")}`;
 
       const agreement = agreementPercent(ranking, community.map((item) => item.id));
       agreementText = `\n\n🤝 <b>Deine Übereinstimmung mit der Community</b>\n${agreement}%`;
-    } else {
-      communityText = "\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\nDu bist die erste Stimme in dieser Gruppe.";
     }
 
     if (category.send_images !== false) {

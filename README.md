@@ -70,3 +70,23 @@ Der Bot zeigt die persönliche numerische Telegram-ID, den Benutzernamen und die
 4. Zuerst die numerische Telegram-ID senden.
 5. Danach das Kontingent auswählen: 1, 3, 5, 10 oder unbegrenzt.
 6. Erst mit der Kontingentauswahl wird die Freigabe gespeichert.
+
+## Version 3.4 – Tokenzeit, zusätzliche Owner, Bildvorschau
+
+- Creator-Token: erst Kategorienkontingent, dann Gültigkeitsdauer (1 Stunde, 24 Stunden, 7 Tage, 30 Tage oder ohne Ablauf). Danach wird der Token automatisch generiert.
+- Im Rollenmenü kann ein bestehender Owner weitere Owner per numerischer Telegram-ID hinzufügen.
+- Unter **Kategorien → Bilder verwalten** werden jetzt zuerst alle hinterlegten Bilder als Telegram-Alben mit Position und Namen angezeigt.
+- Das Community-Ranking nach einer Abstimmung enthält die gerade abgegebene Stimme sofort.
+
+## Version 3.5 – Navigation, Token-Menü und Benutzerverwaltung
+
+- Alle zentralen Untermenüs besitzen einen **⬅️ Zurück**-Button.
+- Player können im privaten Bot-Chat mit `/token` oder über **🎟 Creator-Token einlösen** ein eigenes Token-Menü öffnen und den Token anschließend als normale Nachricht senden.
+- Unter `/rollen` → **Owner & Creator verwalten** werden Benutzername, Telegram-ID, Rolle und bei Creatorn das Kontingent angezeigt.
+- Owner und Creator können dort einzeln ausgewählt und ihre Berechtigung nach einer Sicherheitsabfrage entfernt werden. Der Haupt-Owner aus `ADMIN_TELEGRAM_USER_ID` kann nicht entfernt werden.
+- Bei Freigaben per Telegram-ID versucht der Bot den Telegram-Benutzernamen automatisch zu laden. Falls Telegram ihn noch nicht kennt, wird er aktualisiert, sobald der Nutzer `/id` verwendet.
+- Zusätzliche Owner verwenden jetzt ihre eigenen Verwaltungssitzungen korrekt.
+
+### Geprüfte vorhandene Funktionen
+
+Weiterhin integriert sind insbesondere: eigene Kategorien und Bilder über Telegram, Bildvorschau und Bildverwaltung, Dark Mode, bis zu 30 Einträge, einmalige Abstimmung pro Nutzer/Gruppe/Kategorie, Anzeige des früheren Ergebnisses, Ergebnisbilder vor der Textnachricht, Bildversand pro Kategorie ein/aus, Community-Ranking inklusive der aktuellen Stimme, Übereinstimmung, `/statistik`, `/top`, `/leaderboard`, `/history`, getrennte Telegram-Themen für Umfrage und Ergebnisse, Creator-Kontingente, zeitlich begrenzte oder unbegrenzte Creator-Tokens, zusätzliche Owner und `/id`.

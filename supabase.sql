@@ -126,3 +126,6 @@ where role = 'creator';
 
 -- Alte Player-Freigaben werden nicht mehr benötigt; Player sind automatisch alle Nutzer.
 update bot_users set active = false where role = 'player';
+
+-- Version 3.4: Zusätzliche Owner können über bot_users mit role='owner' gespeichert werden.
+-- Die bestehende Rollenprüfung erlaubt 'owner' bereits; keine destruktive Migration nötig.
