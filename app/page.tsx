@@ -34,40 +34,61 @@ export default function Home() {
   const [sharing, setSharing] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [telegramInitData, setTelegramInitData] = useState("");
 
   useEffect(() => {
-    const webApp = window.Telegram?.WebApp;
-    webApp?.ready();
-    webApp?.expand();
-    webApp?.setHeaderColor?.("#0b0f17");
-    webApp?.setBackgroundColor?.("#0b0f17");
-    const params = new URLSearchParams(window.location.search);
-    const requestedChatId = params.get("chat_id");
-    const requestedCategoryId = params.get("category_id");
-    setChatId(requestedChatId);
-    setCategoryId(requestedCategoryId);
+    let cancelled = false;
 
-    fetch("/api/game", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({
-        initData: webApp?.initData ?? "",
-        chatId: requestedChatId,
-        categoryId: requestedCategoryId
-      })
-    })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Konfiguration konnte nicht geladen werden.");
-        return data as GameData;
-      })
-      .then((data) => {
-        if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) throw new Error("Die Kategorie braucht 2 bis 30 Einträge.");
-        setGame(data);
+    async function loadGame() {
+      const webApp = window.Telegram?.WebApp;
+      webApp?.ready();
+      webApp?.expand();
+      webApp?.setHeaderColor?.("#0b0f17");
+      webApp?.setBackgroundColor?.("#0b0f17");
+
+      const params = new URLSearchParams(window.location.search);
+      const requestedChatId = params.get("chat_id");
+      const requestedCategoryId = params.get("category_id");
+      setChatId(requestedChatId);
+      setCategoryId(requestedCategoryId);
+
+      // Telegram Android stellt initData auf manchen Geräten erst kurz nach dem
+      // ersten Rendern bereit. Deshalb warten wir bis zu vier Sekunden darauf.
+      let initData = "";
+      const deadline = Date.now() + 4000;
+      while (!initData && Date.now() < deadline && !cancelled) {
+        initData = window.Telegram?.WebApp?.initData?.trim() ?? "";
+        if (!initData) await new Promise((resolve) => window.setTimeout(resolve, 100));
+      }
+
+      if (cancelled) return;
+      if (!initData) {
+        throw new Error("Telegram-Anmeldedaten wurden nicht geladen. Bitte die Mini App schließen und erneut über den aktuellen Spiel-Button öffnen.");
+      }
+      setTelegramInitData(initData);
+
+      const response = await fetch("/api/game", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ initData, chatId: requestedChatId, categoryId: requestedCategoryId })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Konfiguration konnte nicht geladen werden.");
+      if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) {
+        throw new Error("Die Kategorie braucht 2 bis 30 Einträge.");
+      }
+      if (!cancelled) {
+        setGame(data as GameData);
         setRanking(Array(data.items.length).fill(null));
-      })
-      .catch((error) => setLoadError(error instanceof Error ? error.message : "Unbekannter Ladefehler"));
+      }
+    }
+
+    loadGame().catch((error) => {
+      if (!cancelled) setLoadError(error instanceof Error ? error.message : "Unbekannter Ladefehler");
+    });
+
+    return () => { cancelled = true; };
   }, []);
 
   const items = game?.items ?? [];
@@ -92,7 +113,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          initData: window.Telegram?.WebApp.initData ?? "",
+          initData: telegramInitData || window.Telegram?.WebApp.initData || "",
           chatId,
           categoryId: game?.categoryId ?? categoryId,
           ranking: ranking.map((item, index) => ({ position: index + 1, itemId: item?.id ?? "", title: item?.title ?? "–" }))
@@ -108,7 +129,7 @@ export default function Home() {
     }
   }
 
-  if (loadError) return <main><section className="card error"><div className="content"><h1>Fehler</h1><p>{loadError}</p></div></section></main>;
+  if (loadError) return <main><section className="card error"><div className="content"><h1>Fehler</h1><p>{loadError}</p><button className="primary" onClick={() => window.location.reload()}>Erneut versuchen</button></div></section></main>;
   if (!game) return <main><section className="card loading"><div className="content"><p>Lade Spiel …</p></div></section></main>;
 
   if (game.alreadyVoted && game.previousRanking?.length) {

@@ -1,29 +1,11 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "../../../lib/supabase";
+import { telegramAuthErrorMessage, validateTelegramInitData } from "../../../lib/telegram-auth";
 
 const MAX_ITEMS = 30;
 
 type RankingEntry = { position: number; itemId: string; title: string };
 type ItemRow = { id: string; title: string; image_url: string; category_id: string };
-
-function validateTelegramInitData(initData: string, botToken: string): boolean {
-  if (!initData) return false;
-  const params = new URLSearchParams(initData);
-  const receivedHash = params.get("hash");
-  if (!receivedHash) return false;
-  params.delete("hash");
-  const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > 3600) return false;
-  const dataCheckString = [...params.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-  const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
-  const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
-  if (receivedHash.length !== calculatedHash.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(calculatedHash, "hex"), Buffer.from(receivedHash, "hex"));
-}
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[char] ?? char));
@@ -80,8 +62,10 @@ export async function POST(request: NextRequest) {
     ranking?: RankingEntry[];
   };
 
-  if (!validateTelegramInitData(initData ?? "", botToken)) {
-    return NextResponse.json({ error: "Telegram-Anmeldung ist ungültig oder abgelaufen." }, { status: 401 });
+  const auth = validateTelegramInitData(initData ?? "", botToken);
+  if (!auth.ok) {
+    console.error("Telegram auth failed", { reason: auth.reason, ageSeconds: auth.ageSeconds, route: "share" });
+    return NextResponse.json({ error: telegramAuthErrorMessage(auth.reason), code: auth.reason }, { status: 401 });
   }
   if (!chatId || !/^-?\d+$/.test(chatId)) return NextResponse.json({ error: "Gruppen-ID fehlt." }, { status: 400 });
   if (!categoryId) return NextResponse.json({ error: "Kategorie-ID fehlt." }, { status: 400 });

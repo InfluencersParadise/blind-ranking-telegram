@@ -1,26 +1,8 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "../../../lib/supabase";
+import { telegramAuthErrorMessage, validateTelegramInitData } from "../../../lib/telegram-auth";
 
 export const dynamic = "force-dynamic";
-
-function validateTelegramInitData(initData: string, botToken: string): boolean {
-  if (!initData) return false;
-  const params = new URLSearchParams(initData);
-  const receivedHash = params.get("hash");
-  if (!receivedHash) return false;
-  params.delete("hash");
-  const authDate = Number(params.get("auth_date"));
-  if (!authDate || Date.now() / 1000 - authDate > 3600) return false;
-  const dataCheckString = [...params.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-  const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
-  const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
-  if (receivedHash.length !== calculatedHash.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(calculatedHash, "hex"), Buffer.from(receivedHash, "hex"));
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,8 +10,10 @@ export async function POST(request: NextRequest) {
     if (!botToken) return NextResponse.json({ error: "Bot-Token fehlt." }, { status: 500 });
 
     const body = await request.json() as { initData?: string; chatId?: string | null; categoryId?: string | null };
-    if (!validateTelegramInitData(body.initData ?? "", botToken)) {
-      return NextResponse.json({ error: "Telegram-Anmeldung ist ungültig oder abgelaufen." }, { status: 401 });
+    const auth = validateTelegramInitData(body.initData ?? "", botToken);
+    if (!auth.ok) {
+      console.error("Telegram auth failed", { reason: auth.reason, ageSeconds: auth.ageSeconds, route: "game" });
+      return NextResponse.json({ error: telegramAuthErrorMessage(auth.reason), code: auth.reason }, { status: 401 });
     }
     if (!body.chatId || !/^-?\d+$/.test(body.chatId)) {
       return NextResponse.json({ error: "Gruppen-ID fehlt." }, { status: 400 });
