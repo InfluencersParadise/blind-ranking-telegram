@@ -1,0 +1,6 @@
+FMK-UPDATE v3.9.1
+
+- Nach der Abstimmung wird die eigene Wahl separat angezeigt.
+- Bereits gespeicherte FMK-Wahlen werden beim erneuten Öffnen korrekt geladen.
+- FMK-Bilder werden nicht mehr zugeschnitten.
+- Auswahl- und Ergebnisbilder verwenden das originale Seitenverhältnis (object-fit: contain / height: auto), wie beim Blind Ranking.

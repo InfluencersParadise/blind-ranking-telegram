@@ -250,6 +250,32 @@ export default function FmkPage() {
 
       {status && <p className="fmk-status" role="status">{status}</p>}
 
+      {showResults && (
+        <section className="fmk-own-choice" aria-label="Deine FMK-Auswahl">
+          <div className="fmk-results-heading">
+            <p className="fmk-eyebrow">Deine Wahl</p>
+            <h2>So hast du entschieden</h2>
+          </div>
+          <div className="fmk-own-choice-grid">
+            {ROLES.map((role) => {
+              const selectedItem = game.items.find((item) => selection[item.id] === role.value);
+              if (!selectedItem) return null;
+              return (
+                <article className={`fmk-own-choice-card is-${role.value}`} key={role.value}>
+                  <div className="fmk-own-choice-image">
+                    <img src={selectedItem.image} alt={selectedItem.title} />
+                  </div>
+                  <div>
+                    <span className="fmk-own-role">{role.emoji} {role.label}</span>
+                    <h3>{selectedItem.title}</h3>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {showResults && game.community && (
         <section className="fmk-results">
           <div className="fmk-results-heading">
