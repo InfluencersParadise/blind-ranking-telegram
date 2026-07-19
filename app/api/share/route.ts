@@ -109,7 +109,10 @@ export async function POST(request: NextRequest) {
   }
 
   const typedItems = items as ItemRow[];
-  const isFmk = category.game_type === "fmk";
+  if (category.game_type !== "blind_ranking") {
+    return NextResponse.json({ error: "FMK-Ergebnisse müssen über den eigenen FMK-Spielmodus gesendet werden." }, { status: 400 });
+  }
+  const isFmk = false;
   const roleLabels = ["🔥 Fuck", "❤️ Marry", "💀 Kill"];
   const byId = new Map(typedItems.map((item) => [item.id, item]));
   const orderedItems = ranking.map((entry) => byId.get(entry.itemId)!).filter(Boolean);

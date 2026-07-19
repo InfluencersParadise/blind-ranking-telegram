@@ -43,10 +43,12 @@ export async function POST(request: NextRequest) {
     ]);
     if (categoryError) throw categoryError;
     if (itemsError) throw itemsError;
-    const gameType = category.game_type === "fmk" ? "fmk" : "blind_ranking";
-    const minimum = gameType === "fmk" ? 3 : 2;
-    if (!items || items.length < minimum || items.length > 30) {
-      return NextResponse.json({ error: gameType === "fmk" ? "Die FMK-Kategorie braucht mindestens 3 Bilder." : "Die Kategorie braucht 2 bis 30 Bilder." }, { status: 400 });
+    if (category.game_type !== "blind_ranking") {
+      return NextResponse.json({ error: "Dieses Spiel ist kein Blind Ranking. Starte es mit /fmk." }, { status: 400 });
+    }
+    const gameType = "blind_ranking" as const;
+    if (!items || items.length < 2 || items.length > 30) {
+      return NextResponse.json({ error: "Die Kategorie braucht 2 bis 30 Bilder." }, { status: 400 });
     }
 
     const { data: existingVote, error: voteError } = await supabase
@@ -91,13 +93,12 @@ export async function POST(request: NextRequest) {
       }).filter((entry) => entry.id);
     }
 
-    const shuffled = [...items].sort(() => Math.random() - 0.5);
-    const playableItems = gameType === "fmk" ? shuffled.slice(0, 3) : shuffled;
+    const playableItems = [...items].sort(() => Math.random() - 0.5);
     return NextResponse.json({
       categoryId,
       title: category.name,
       gameType,
-      subtitle: gameType === "fmk" ? "Ordne jede Person genau einer Auswahl zu." : "Wähle einen freien Platz. Deine Entscheidung ist endgültig.",
+      subtitle: "Wähle einen freien Platz. Deine Entscheidung ist endgültig.",
       items: playableItems.map((item) => ({ id: item.id, title: item.title, image: item.image_url })),
       alreadyVoted: Boolean(existingVote?.id),
       previousRanking,
