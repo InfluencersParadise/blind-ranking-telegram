@@ -38,13 +38,15 @@ export async function POST(request: NextRequest) {
     if (!categoryId) return NextResponse.json({ error: "Noch keine aktive Kategorie vorhanden." }, { status: 404 });
 
     const [{ data: category, error: categoryError }, { data: items, error: itemsError }] = await Promise.all([
-      supabase.from("categories").select("id,name").eq("id", categoryId).single(),
+      supabase.from("categories").select("id,name,game_type").eq("id", categoryId).single(),
       supabase.from("items").select("id,title,image_url,position").eq("category_id", categoryId).order("position", { ascending: true })
     ]);
     if (categoryError) throw categoryError;
     if (itemsError) throw itemsError;
-    if (!items || items.length < 2 || items.length > 30) {
-      return NextResponse.json({ error: "Die Kategorie braucht 2 bis 30 Bilder." }, { status: 400 });
+    const gameType = category.game_type === "fmk" ? "fmk" : "blind_ranking";
+    const minimum = gameType === "fmk" ? 3 : 2;
+    if (!items || items.length < minimum || items.length > 30) {
+      return NextResponse.json({ error: gameType === "fmk" ? "Die FMK-Kategorie braucht mindestens 3 Bilder." : "Die Kategorie braucht 2 bis 30 Bilder." }, { status: 400 });
     }
 
     const { data: existingVote, error: voteError } = await supabase
@@ -90,11 +92,13 @@ export async function POST(request: NextRequest) {
     }
 
     const shuffled = [...items].sort(() => Math.random() - 0.5);
+    const playableItems = gameType === "fmk" ? shuffled.slice(0, 3) : shuffled;
     return NextResponse.json({
       categoryId,
       title: category.name,
-      subtitle: "Wähle einen freien Platz. Deine Entscheidung ist endgültig.",
-      items: shuffled.map((item) => ({ id: item.id, title: item.title, image: item.image_url })),
+      gameType,
+      subtitle: gameType === "fmk" ? "Ordne jede Person genau einer Auswahl zu." : "Wähle einen freien Platz. Deine Entscheidung ist endgültig.",
+      items: playableItems.map((item) => ({ id: item.id, title: item.title, image: item.image_url })),
       alreadyVoted: Boolean(existingVote?.id),
       previousRanking,
       totalVotes

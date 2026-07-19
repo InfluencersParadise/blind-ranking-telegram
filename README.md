@@ -90,3 +90,11 @@ Der Bot zeigt die persönliche numerische Telegram-ID, den Benutzernamen und die
 ### Geprüfte vorhandene Funktionen
 
 Weiterhin integriert sind insbesondere: eigene Kategorien und Bilder über Telegram, Bildvorschau und Bildverwaltung, Dark Mode, bis zu 30 Einträge, einmalige Abstimmung pro Nutzer/Gruppe/Kategorie, Anzeige des früheren Ergebnisses, Ergebnisbilder vor der Textnachricht, Bildversand pro Kategorie ein/aus, Community-Ranking inklusive der aktuellen Stimme, Übereinstimmung, `/statistik`, `/top`, `/leaderboard`, `/history`, getrennte Telegram-Themen für Umfrage und Ergebnisse, Creator-Kontingente, zeitlich begrenzte oder unbegrenzte Creator-Tokens, zusätzliche Owner und `/id`.
+
+
+## Version 3.7
+- Obermenü „Spiele“
+- getrennte Verwaltung für Blind Ranking und Fuck, Marry, Kill
+- FMK zeigt zufällig drei Einträge und verlangt genau eine Zuordnung zu Fuck, Marry und Kill
+- vorhandene Kategorien bleiben automatisch Blind Ranking
+- `supabase.sql` nach dem Update einmal ausführen

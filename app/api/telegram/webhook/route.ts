@@ -23,7 +23,7 @@ type CallbackQuery = {
 };
 type TelegramUpdate = { message?: TelegramMessage; callback_query?: CallbackQuery };
 
-type CategoryRow = { id: string; name: string };
+type CategoryRow = { id: string; name: string; game_type?: "blind_ranking" | "fmk" };
 type SessionRow = {
   category_id: string | null;
   mode: string;
@@ -260,7 +260,7 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
   const adminSection = isManager
     ? "\n\n<b>🛠 Verwaltung</b>\n" +
       "<code>/neuekategorie Name</code> – neue Kategorie anlegen\n" +
-      "<code>/kategorien</code> – Kategorien mit Buttons verwalten\n" +
+      "<code>/kategorien</code> – Blind-Ranking-Kategorien verwalten\n" +
       "<code>/bearbeiten Kategorie</code> – Kategorie direkt öffnen\n" +
       "<code>/loeschen Kategorie</code> – Kategorie löschen (mit Bestätigung)\n" +
       "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
@@ -272,8 +272,7 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
 
   const keyboard = isManager
     ? [
-        [{ text: "🎮 Spiel starten", callback_data: "menuplay:x" }],
-        [{ text: "➕ Neue Kategorie", callback_data: "menunew:x" }, { text: "📂 Kategorien", callback_data: "menucats:x" }],
+        [{ text: "🎮 Spiele", callback_data: "gamesmenu:x" }],
         [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }],
         ...(role === "owner" ? [[{ text: "🔐 Rollen & Tokens", callback_data: "rolemenu:x" }]] : [])
       ]
@@ -306,9 +305,9 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
   );
 }
 
-async function categoryMenu(token: string, chatId: string | number, userId: number, role: BotRole) {
+async function categoryMenu(token: string, chatId: string | number, userId: number, role: BotRole, gameType: "blind_ranking" | "fmk" = "blind_ranking") {
   const supabase = getSupabaseAdmin();
-  let query = supabase.from("categories").select("id,name,items(count)").order("created_at", { ascending: false });
+  let query = supabase.from("categories").select("id,name,game_type,items(count)").eq("game_type", gameType).order("created_at", { ascending: false });
   if (role === "creator") query = query.eq("created_by", userId);
   const { data, error } = await query;
   if (error) throw error;
@@ -320,14 +319,14 @@ async function categoryMenu(token: string, chatId: string | number, userId: numb
     text: `${category.name} (${category.items?.[0]?.count ?? 0})`,
     callback_data: `cat:${category.id}`
   }]);
-  await send(token, chatId, "<b>Kategorien verwalten</b>\n\nTippe eine Kategorie an:", {
-    reply_markup: { inline_keyboard: [...buttons, backButton("menuhelp:x")] }
+  await send(token, chatId, `<b>${gameType === "fmk" ? "🔥 FMK" : "🏆 Blind Ranking"} – Kategorien</b>\n\nTippe eine Kategorie an:`, {
+    reply_markup: { inline_keyboard: [...buttons, backButton("gamesmenu:x")] }
   });
 }
 
 async function showCategoryActions(token: string, chatId: string | number, categoryId: string) {
   const supabase = getSupabaseAdmin();
-  const { data: category, error } = await supabase.from("categories").select("id,name,send_images").eq("id", categoryId).maybeSingle();
+  const { data: category, error } = await supabase.from("categories").select("id,name,send_images,game_type").eq("id", categoryId).maybeSingle();
   if (error) throw error;
   if (!category) {
     await send(token, chatId, "Kategorie nicht gefunden.");
@@ -343,7 +342,7 @@ async function showCategoryActions(token: string, chatId: string | number, categ
         [{ text: category.send_images !== false ? "📝 Ergebnis ohne Bilder" : "🖼 Ergebnis mit Bildern", callback_data: `toggleimages:${categoryId}` }],
         [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
         [{ text: "🗑 Kategorie löschen", callback_data: `delcatask:${categoryId}` }],
-        backButton("menucats:x")
+        backButton(category.game_type === "fmk" ? "managefmk:x" : "managebr:x")
       ]
     }
   });
@@ -500,7 +499,25 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
 
 Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</code>.`, { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
   }
-  if (action === "menucats") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role); }
+  if (action === "gamesmenu") {
+    if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Spiele verwalten.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
+    return send(token, chatId, "<b>🎮 Spiele verwalten</b>\n\nWähle den Spieltyp:", { reply_markup: { inline_keyboard: [
+      [{ text: "🏆 Blind Ranking", callback_data: "managebr:x" }],
+      [{ text: "🔥 Fuck, Marry, Kill", callback_data: "managefmk:x" }],
+      backButton("menuhelp:x")
+    ] } });
+  }
+  if (action === "managebr" || action === "managefmk") {
+    const gameType = action === "managefmk" ? "fmk" : "blind_ranking";
+    return send(token, chatId, `<b>${gameType === "fmk" ? "🔥 Fuck, Marry, Kill" : "🏆 Blind Ranking"}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: "➕ Neues Spiel", callback_data: `${gameType === "fmk" ? "newfmk" : "newbr"}:x` }],
+      [{ text: "📂 Kategorien verwalten", callback_data: `${gameType === "fmk" ? "catsfmk" : "catsbr"}:x` }],
+      [{ text: "🎮 Aktives Spiel öffnen", callback_data: "menuplay:x" }],
+      backButton("gamesmenu:x")
+    ] } });
+  }
+  if (action === "catsbr" || action === "catsfmk") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role, action === "catsfmk" ? "fmk" : "blind_ranking"); }
+  if (action === "menucats") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role, "blind_ranking"); }
   if (action === "rolemenu") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return showRoleMenu(token, chatId); }
   if (action === "roleusers") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return listRoleUsers(token, chatId, ownerId); }
   if (action === "roleuser") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return showRoleUser(token, chatId, Number(id), ownerId); }
@@ -614,10 +631,11 @@ Der Nutzer wird danach wieder Player.`, { reply_markup: { inline_keyboard: [[{ t
     await setSession(callback.from.id, { category_id: null, mode: "awaiting_revoke_user", pending_file_id: null, pending_item_id: null });
     return send(token, chatId, "Sende jetzt die numerische Telegram-ID des zu sperrenden Creators.");
   }
-  if (action === "menunew") {
+  if (["menunew", "newbr", "newfmk"].includes(action)) {
     try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
-    await setSession(callback.from.id, { category_id: null, mode: "awaiting_new_category_name", pending_file_id: null, pending_item_id: null });
-    await send(token, chatId, "Sende jetzt den Namen der neuen Kategorie.");
+    const gameType = action === "newfmk" ? "fmk" : "blind_ranking";
+    await setSession(callback.from.id, { category_id: null, mode: `awaiting_new_category_name_${gameType}`, pending_file_id: null, pending_item_id: null });
+    await send(token, chatId, `Sende jetzt den Namen der neuen ${gameType === "fmk" ? "FMK-" : "Blind-Ranking-"}Kategorie.`, { reply_markup: { inline_keyboard: [backButton(gameType === "fmk" ? "managefmk:x" : "managebr:x")] } });
     return;
   }
   if (action === "menuplay") {
@@ -1112,7 +1130,7 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
           await send(token, chatId, "Bitte so senden: <code>/neuekategorie Meine Kategorie</code>");
           return NextResponse.json({ ok: true });
         }
-        const { data: category, error } = await supabase.from("categories").insert({ name, created_by: userId }).select("id,name").single();
+        const { data: category, error } = await supabase.from("categories").insert({ name, created_by: userId, game_type: "blind_ranking" }).select("id,name").single();
         if (error) {
           if (String(error.message).toLowerCase().includes("duplicate")) {
             await send(token, chatId, "Eine Kategorie mit diesem Namen existiert bereits.");
@@ -1305,7 +1323,7 @@ Neues Kontingent wählen:`, {
       }
 
       if (text && !isCommand && session) {
-        if (session.mode === "awaiting_new_category_name") {
+        if (session.mode === "awaiting_new_category_name" || session.mode.startsWith("awaiting_new_category_name_")) {
           try { await assertCreatorCanCreate(userId, role); } catch (error) { await send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); return NextResponse.json({ ok: true }); }
           const { data: category, error } = await supabase.from("categories").insert({ name: text, created_by: userId }).select("id,name").single();
           if (error) {

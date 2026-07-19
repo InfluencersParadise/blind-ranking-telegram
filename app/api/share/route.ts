@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
     chatId?: string | null;
     categoryId?: string | null;
     ranking?: RankingEntry[];
+    gameType?: "blind_ranking" | "fmk";
   };
 
   const auth = validateTelegramInitData(initData ?? "", botToken);
@@ -101,13 +102,15 @@ export async function POST(request: NextRequest) {
   const itemIds = ranking.map((entry) => entry.itemId);
   const [{ data: items, error: itemError }, { data: category, error: categoryError }] = await Promise.all([
     supabase.from("items").select("id,title,image_url,category_id").eq("category_id", categoryId).in("id", itemIds),
-    supabase.from("categories").select("name,send_images").eq("id", categoryId).single()
+    supabase.from("categories").select("name,send_images,game_type").eq("id", categoryId).single()
   ]);
   if (itemError || categoryError || !items || items.length !== ranking.length) {
     return NextResponse.json({ error: "Kategorie oder Bilder konnten nicht geladen werden." }, { status: 500 });
   }
 
   const typedItems = items as ItemRow[];
+  const isFmk = category.game_type === "fmk";
+  const roleLabels = ["🔥 Fuck", "❤️ Marry", "💀 Kill"];
   const byId = new Map(typedItems.map((item) => [item.id, item]));
   const orderedItems = ranking.map((entry) => byId.get(entry.itemId)!).filter(Boolean);
 
@@ -178,7 +181,7 @@ export async function POST(request: NextRequest) {
         const percentage = maxPointsPerItem > 0 ? Math.round((item.points / maxPointsPerItem) * 100) : 0;
         return `${index + 1}. <b>${escapeHtml(item.title)}</b> — ${percentage}%`;
       });
-      communityText = `\n\n━━━━━━━━━━━━━━\n\n📊 <b>Community-Ranking</b>\n${communityVoteIds.length} ${communityVoteIds.length === 1 ? "Stimme" : "Stimmen"} inklusive deiner Stimme\n\n${communityLines.join("\n")}`;
+      communityText = `\n\n━━━━━━━━━━━━━━\n\n${isFmk ? "📊 <b>Community-Auswertung</b>" : "📊 <b>Community-Ranking</b>"}\n${communityVoteIds.length} ${communityVoteIds.length === 1 ? "Stimme" : "Stimmen"} inklusive deiner Stimme\n\n${communityLines.join("\n")}`;
 
       const agreement = agreementPercent(ranking, community.map((item) => item.id));
       agreementText = `\n\n🤝 <b>Deine Übereinstimmung mit der Community</b>\n${agreement}%`;
@@ -191,11 +194,11 @@ export async function POST(request: NextRequest) {
     const rankingText = ranking
       .map((entry) => {
         const title = byId.get(entry.itemId)?.title ?? entry.title;
-        return `${entry.position}. <b>${escapeHtml(title)}</b>`;
+        return `${isFmk ? roleLabels[entry.position - 1] : `${entry.position}.`} <b>${escapeHtml(title)}</b>`;
       })
       .join("\n");
 
-    let text = `🏆 <b>${escapeHtml(category.name)}</b> – Ranking von ${escapeHtml(player)}\n\n${rankingText}${communityText}${agreementText}`;
+    let text = `${isFmk ? "🔥" : "🏆"} <b>${escapeHtml(category.name)}</b> – ${isFmk ? "FMK-Auswahl" : "Ranking"} von ${escapeHtml(player)}\n\n${rankingText}${communityText}${agreementText}`;
     if (text.length > 4090) text = text.slice(0, 4050) + "\n…";
     await telegramApi(botToken, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...(resultsThreadId ? { message_thread_id: resultsThreadId } : {}) });
     return NextResponse.json({ ok: true });

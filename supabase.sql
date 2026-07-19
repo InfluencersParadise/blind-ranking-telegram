@@ -129,3 +129,8 @@ update bot_users set active = false where role = 'player';
 
 -- Version 3.4: Zusätzliche Owner können über bot_users mit role='owner' gespeichert werden.
 -- Die bestehende Rollenprüfung erlaubt 'owner' bereits; keine destruktive Migration nötig.
+
+
+-- Version 3.7: mehrere Spieltypen
+alter table categories add column if not exists game_type text not null default 'blind_ranking' check (game_type in ('blind_ranking','fmk'));
+create index if not exists categories_game_type_idx on categories(game_type);

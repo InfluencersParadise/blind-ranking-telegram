@@ -6,6 +6,7 @@ type Item = { id: string; title: string; image: string };
 type PreviousItem = Item & { position: number; firstPlacePercent: number };
 type GameData = {
   categoryId: string;
+  gameType?: "blind_ranking" | "fmk";
   title?: string;
   subtitle?: string;
   items: Item[];
@@ -75,8 +76,8 @@ export default function Home() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Konfiguration konnte nicht geladen werden.");
-      if (!Array.isArray(data.items) || data.items.length < 2 || data.items.length > 30) {
-        throw new Error("Die Kategorie braucht 2 bis 30 Einträge.");
+      if (!Array.isArray(data.items) || data.items.length < (data.gameType === "fmk" ? 3 : 2) || data.items.length > 30) {
+        throw new Error(data.gameType === "fmk" ? "Die FMK-Kategorie braucht mindestens 3 Einträge." : "Die Kategorie braucht 2 bis 30 Einträge.");
       }
       if (!cancelled) {
         setGame(data as GameData);
@@ -94,6 +95,8 @@ export default function Home() {
   const items = game?.items ?? [];
   const done = game !== null && round >= items.length;
   const current = items[round];
+  const isFmk = game?.gameType === "fmk";
+  const fmkLabels = ["🔥 Fuck", "❤️ Marry", "💀 Kill"];
   const gridStyle = useMemo(() => ({ gridTemplateColumns: `repeat(${Math.min(items.length, 5)}, minmax(48px, 1fr))` }), [items.length]);
 
   function choose(position: number) {
@@ -116,6 +119,7 @@ export default function Home() {
           initData: telegramInitData || window.Telegram?.WebApp.initData || "",
           chatId,
           categoryId: game?.categoryId ?? categoryId,
+          gameType: game?.gameType ?? "blind_ranking",
           ranking: ranking.map((item, index) => ({ position: index + 1, itemId: item?.id ?? "", title: item?.title ?? "–" }))
         })
       });
@@ -168,7 +172,7 @@ export default function Home() {
             <h1>{current.title}</h1>
             <p className="muted">{game.subtitle ?? "Wähle einen freien Platz. Deine Entscheidung ist endgültig."}</p>
             <div className="slots" style={gridStyle}>
-              {ranking.map((value, index) => <button className="slot" key={index} disabled={Boolean(value)} onClick={() => choose(index)}>{index + 1}</button>)}
+              {ranking.map((value, index) => <button className="slot" key={index} disabled={Boolean(value)} onClick={() => choose(index)}>{isFmk ? fmkLabels[index] : index + 1}</button>)}
             </div>
           </div>
         </section>
@@ -177,11 +181,11 @@ export default function Home() {
           <div className="content">
             <p className="brand">{game.title ?? "Blind Ranking"}</p>
             <p className="kicker">Fertig</p>
-            <h1>Dein Blind Ranking</h1>
+            <h1>{isFmk ? "Deine FMK-Auswahl" : "Dein Blind Ranking"}</h1>
             <div className="ranking">
               {ranking.map((item, index) => (
                 <div className="rankrow" key={index}>
-                  <div className="rankno">{index + 1}</div>
+                  <div className="rankno">{isFmk ? fmkLabels[index] : index + 1}</div>
                   {item && <img src={item.image} alt="" />}
                   <strong>{item?.title}</strong>
                 </div>
