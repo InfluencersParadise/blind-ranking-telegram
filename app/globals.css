@@ -38,3 +38,65 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
   .slot { min-height: 48px; border-radius: 12px; }
 }
 .rankrow small { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; line-height: 1.35; }
+
+/* FMK Mini App */
+.fmk-shell { max-width: 1120px; padding: 18px 16px 40px; }
+.fmk-header { margin: 8px 0 20px; text-align: center; }
+.fmk-header h1 { margin: 5px 0 7px; font-size: clamp(28px, 6vw, 48px); }
+.fmk-header > p:last-child { margin: 0; color: #c9b9c8; }
+.fmk-eyebrow { margin: 0; color: #f5a6d3; font-size: 12px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.fmk-panel { margin-top: 15vh; padding: 26px; border: 1px solid #493041; border-radius: 24px; background: #1b111b; text-align: center; }
+.fmk-error { border-color: #7f1d35; }
+.fmk-loading { display: grid; justify-items: center; gap: 14px; }
+.fmk-loader { width: 34px; height: 34px; border: 3px solid #523447; border-top-color: #f472b6; border-radius: 50%; animation: fmk-spin .75s linear infinite; }
+@keyframes fmk-spin { to { transform: rotate(360deg); } }
+.fmk-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.fmk-card { min-width: 0; overflow: hidden; border: 1px solid #3b2a38; border-radius: 22px; background: linear-gradient(180deg, #211621, #171017); box-shadow: 0 18px 45px rgba(0,0,0,.28); transition: transform .18s ease, border-color .18s ease; }
+.fmk-card.is-fuck { border-color: #fb7185; }
+.fmk-card.is-marry { border-color: #f472b6; }
+.fmk-card.is-kill { border-color: #a78bfa; }
+.fmk-image-wrap { position: relative; aspect-ratio: 4 / 5; overflow: hidden; background: #0b080b; }
+.fmk-image-wrap img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.fmk-assigned { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(12,7,12,.82); font-size: 22px; backdrop-filter: blur(8px); }
+.fmk-card-body { padding: 13px; }
+.fmk-card-body h2 { overflow: hidden; margin: 0 0 12px; font-size: clamp(15px, 2.5vw, 20px); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.fmk-role-list { display: grid; gap: 7px; }
+.fmk-role { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 42px; border: 1px solid #493444; border-radius: 12px; background: #291c28; color: #fff; font-weight: 850; cursor: pointer; transition: transform .12s ease, opacity .12s ease, background .12s ease; }
+.fmk-role:not(:disabled):active { transform: scale(.97); }
+.fmk-role:disabled { opacity: .28; cursor: not-allowed; }
+.fmk-role.is-active { opacity: 1; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+.fmk-role.is-fuck.is-active { border-color: #fb7185; background: #7f1d34; }
+.fmk-role.is-marry.is-active { border-color: #f472b6; background: #831843; }
+.fmk-role.is-kill.is-active { border-color: #a78bfa; background: #4c1d95; }
+.fmk-action-bar { position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 18px; padding: 13px 14px; border: 1px solid #4a3243; border-radius: 18px; background: rgba(24,15,23,.94); box-shadow: 0 15px 35px rgba(0,0,0,.38); backdrop-filter: blur(14px); }
+.fmk-action-bar div { display: grid; gap: 3px; }
+.fmk-action-bar span { color: #aa98a8; font-size: 12px; }
+.fmk-submit { min-height: 46px; border: 1px solid #f472b6; border-radius: 13px; padding: 0 18px; background: linear-gradient(135deg, #db2777, #9333ea); color: #fff; font-weight: 900; cursor: pointer; }
+.fmk-submit:disabled { opacity: .45; cursor: not-allowed; }
+.fmk-status { margin: 14px 0 0; color: #e7d5e3; text-align: center; }
+.fmk-results { margin-top: 24px; padding-top: 22px; border-top: 1px solid #3c2a38; }
+.fmk-results-heading { margin-bottom: 14px; text-align: center; }
+.fmk-results-heading h2 { margin: 5px 0 0; }
+.fmk-results-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.fmk-result-card { overflow: hidden; border: 1px solid #3e2a3a; border-radius: 18px; background: #1d141c; }
+.fmk-result-card > img { width: 100%; aspect-ratio: 4 / 3; display: block; object-fit: cover; }
+.fmk-result-card > div { padding: 12px; }
+.fmk-result-card h3 { overflow: hidden; margin: 0 0 9px; text-overflow: ellipsis; white-space: nowrap; }
+.fmk-result-card p { display: flex; justify-content: space-between; gap: 10px; margin: 6px 0 0; color: #cdbdcc; }
+.fmk-result-card strong { color: #fff; }
+@media (max-width: 640px) {
+  .fmk-shell { padding: 10px 8px 28px; }
+  .fmk-grid { gap: 6px; }
+  .fmk-card { border-radius: 15px; }
+  .fmk-card-body { padding: 7px 5px 8px; }
+  .fmk-card-body h2 { margin-bottom: 7px; font-size: 13px; }
+  .fmk-role-list { gap: 5px; }
+  .fmk-role { min-height: 38px; padding: 0 3px; border-radius: 9px; font-size: 11px; }
+  .fmk-role span { font-size: 15px; }
+  .fmk-assigned { top: 6px; right: 6px; width: 34px; height: 34px; font-size: 18px; }
+  .fmk-action-bar { align-items: stretch; flex-direction: column; bottom: 7px; }
+  .fmk-submit { width: 100%; }
+  .fmk-results-grid { grid-template-columns: 1fr; }
+  .fmk-result-card { display: grid; grid-template-columns: 110px 1fr; }
+  .fmk-result-card > img { height: 100%; aspect-ratio: auto; }
+}
