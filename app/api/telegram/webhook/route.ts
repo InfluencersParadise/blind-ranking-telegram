@@ -205,10 +205,18 @@ async function uploadTelegramPhoto(token: string, fileId: string, userId: number
   return { imageUrl, objectPath };
 }
 
-async function findCategoryByName(name: string): Promise<CategoryRow | null> {
+async function findCategoryByName(
+  name: string,
+  gameType?: "blind_ranking" | "fmk"
+): Promise<CategoryRow | null> {
   if (!name.trim()) return null;
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase.from("categories").select("id,name").ilike("name", name.trim()).limit(1).maybeSingle();
+  let query = getSupabaseAdmin()
+    .from("categories")
+    .select("id,name,game_type")
+    .ilike("name", name.trim())
+    .limit(1);
+  if (gameType) query = query.eq("game_type", gameType);
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return data as CategoryRow | null;
 }
@@ -259,7 +267,8 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
   const isManager = role === "owner" || role === "creator";
   const adminSection = isManager
     ? "\n\n<b>🛠 Verwaltung</b>\n" +
-      "<code>/neuekategorie Name</code> – neue Kategorie anlegen\n" +
+      "<code>/neuekategorie Name</code> – neues Blind Ranking anlegen\n" +
+      "<code>/neuesfmk Name</code> – neues FMK-Spiel anlegen\n" +
       "<code>/kategorien</code> – Blind-Ranking-Kategorien verwalten\n" +
       "<code>/bearbeiten Kategorie</code> – Kategorie direkt öffnen\n" +
       "<code>/loeschen Kategorie</code> – Kategorie löschen (mit Bestätigung)\n" +
@@ -315,7 +324,9 @@ async function categoryMenu(token: string, chatId: string | number, userId: numb
   const { data, error } = await query;
   if (error) throw error;
   if (!data?.length) {
-    await send(token, chatId, "Noch keine Kategorien vorhanden. Erstelle eine mit <code>/neuekategorie Name</code>.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
+    await send(token, chatId, gameType === "fmk"
+      ? "Noch keine FMK-Spiele vorhanden. Erstelle eines über <b>Spiele → Fuck, Marry, Kill → Neues Spiel</b> oder mit <code>/neuesfmk Name</code>."
+      : "Noch keine Blind-Ranking-Kategorien vorhanden. Erstelle eine mit <code>/neuekategorie Name</code>.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
     return;
   }
   const buttons = data.map((category: any) => [{
@@ -340,7 +351,9 @@ async function showCategoryActions(token: string, chatId: string | number, categ
   await send(token, chatId, `<b>${escapeHtml(category.name)}</b>\n${count} Bilder\n${imageMode}`, {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "✅ Aktivieren", callback_data: `activate:${categoryId}` }, { text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }],
+        ...(category.game_type === "fmk"
+          ? [[{ text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }]]
+          : [[{ text: "✅ Aktivieren", callback_data: `activate:${categoryId}` }, { text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }]]),
         [{ text: "🖼 Bilder verwalten", callback_data: `items:${categoryId}` }],
         [{ text: category.send_images !== false ? "📝 Ergebnis ohne Bilder" : "🖼 Ergebnis mit Bildern", callback_data: `toggleimages:${categoryId}` }],
         [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
@@ -624,7 +637,7 @@ Der Nutzer wird danach wieder Player.`, { reply_markup: { inline_keyboard: [[{ t
     const [target, quotaCode] = id.split("_", 2);
     const targetId = Number(target);
     const categoryLimit = quotaCode === "u" ? null : Number(quotaCode);
-    if (!Number.isSafeInteger(targetId) || (quotaCode !== "u" && categoryLimit === null || ![1, 3, 5, 10].includes(categoryLimit as number))) return send(token, chatId, "Ungültige Auswahl.");
+    if (!Number.isSafeInteger(targetId) || targetId <= 0 || (quotaCode !== "u" && ![1, 3, 5, 10].includes(categoryLimit as number))) return send(token, chatId, "Ungültige Auswahl.");
     const { error } = await supabase.from("bot_users").update({ category_limit: categoryLimit, updated_at: new Date().toISOString() }).eq("user_id", targetId).eq("role", "creator");
     if (error) throw error;
     return send(token, chatId, `✅ Kontingent für <code>${targetId}</code>: <b>${categoryLimit === null ? "unbegrenzt" : `${categoryLimit} Kategorien`}</b>.`);
@@ -1130,14 +1143,17 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
         return NextResponse.json({ ok: true });
       }
 
-      if (command === "/neuekategorie") {
+      if (command === "/neuekategorie" || command === "/neuesfmk") {
         try { await assertCreatorCanCreate(userId, role); } catch (error) { await send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); return NextResponse.json({ ok: true }); }
+        const gameType: "blind_ranking" | "fmk" = command === "/neuesfmk" ? "fmk" : "blind_ranking";
         const name = commandArg(text);
         if (!name) {
-          await send(token, chatId, "Bitte so senden: <code>/neuekategorie Meine Kategorie</code>");
+          await send(token, chatId, gameType === "fmk"
+            ? "Bitte so senden: <code>/neuesfmk Mein Spiel</code>"
+            : "Bitte so senden: <code>/neuekategorie Meine Kategorie</code>");
           return NextResponse.json({ ok: true });
         }
-        const { data: category, error } = await supabase.from("categories").insert({ name, created_by: userId, game_type: "blind_ranking" }).select("id,name").single();
+        const { data: category, error } = await supabase.from("categories").insert({ name, created_by: userId, game_type: gameType }).select("id,name,game_type").single();
         if (error) {
           if (String(error.message).toLowerCase().includes("duplicate")) {
             await send(token, chatId, "Eine Kategorie mit diesem Namen existiert bereits.");
@@ -1147,7 +1163,9 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
         }
         await incrementCreatorUsage(userId, role);
         await setSession(userId, { category_id: category.id, mode: "awaiting_photo", pending_file_id: null, pending_item_id: null });
-        await send(token, chatId, `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt das erste Bild. Danach frage ich nach dem Namen – oder du setzt den Namen direkt als Bildunterschrift.`);
+        await send(token, chatId, category.game_type === "fmk"
+          ? `✅ FMK-Spiel <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt genau 3 Bilder. Den Namen kannst du jeweils als Bildunterschrift mitsenden.`
+          : `✅ Kategorie <b>${escapeHtml(category.name)}</b> erstellt.\n\nSende jetzt das erste Bild. Danach frage ich nach dem Namen – oder du setzt den Namen direkt als Bildunterschrift.`);
         return NextResponse.json({ ok: true });
       }
 
@@ -1203,7 +1221,7 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
           return NextResponse.json({ ok: true });
         }
         const count = await categoryCount(session.category_id);
-        const { data: finishingCategory } = await supabase.from("categories").select("game_type").eq("id", session.category_id).maybeSingle();
+        const { data: finishingCategory } = await supabase.from("categories").select("name,game_type").eq("id", session.category_id).maybeSingle();
         const isFmkCategory = finishingCategory?.game_type === "fmk";
         if ((isFmkCategory && count !== 3) || (!isFmkCategory && (count < 2 || count > 30))) {
           await send(token, chatId, isFmkCategory ? `Das FMK-Spiel hat aktuell ${count} Bilder. Es müssen genau 3 sein.` : `Die Kategorie hat aktuell ${count} Bilder. Erlaubt sind 2 bis 30.`);
@@ -1211,7 +1229,7 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
         }
         if (!isFmkCategory) await supabase.from("app_settings").upsert({ id: 1, active_category_id: session.category_id });
         await supabase.from("admin_sessions").delete().eq("user_id", userId);
-        await send(token, chatId, isFmkCategory ? `✅ Fertig. Das FMK-Spiel enthält genau 3 Bilder. Starte es in der Gruppe mit <code>/fmk ${"Spielname"}</code>.` : `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv. Starte sie in der Gruppe mit <code>/blindranking</code>.`);
+        await send(token, chatId, isFmkCategory ? `✅ Fertig. Das FMK-Spiel enthält genau 3 Bilder. Starte es in der Gruppe mit <code>/fmk ${escapeHtml(finishingCategory?.name ?? "Spielname")}</code>.` : `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv. Starte sie in der Gruppe mit <code>/blindranking</code>.`);
         return NextResponse.json({ ok: true });
       }
 
@@ -1400,7 +1418,7 @@ Neues Kontingent wählen:`, {
       let categoryId: string | null = null;
       let categoryName = "aktive Kategorie";
       if (requestedName) {
-        const category = await findCategoryByName(requestedName);
+        const category = await findCategoryByName(requestedName, requestedType);
         if (!category) {
           await send(token, chatId, requestedType === "fmk" ? "FMK-Spiel nicht gefunden. Nutze /fmk ohne Zusatz für das neueste FMK-Spiel." : "Kategorie nicht gefunden. Nutze /blindranking ohne Zusatz für die aktive Kategorie.");
           return NextResponse.json({ ok: true });
@@ -1412,19 +1430,48 @@ Neues Kontingent wählen:`, {
         categoryId = category.id;
         categoryName = category.name;
       } else {
-        const { data: setting } = await supabase.from("app_settings").select("active_category_id").eq("id", 1).maybeSingle();
-        categoryId = setting?.active_category_id ?? null;
-        if (categoryId) {
-          const { data: category } = await supabase.from("categories").select("name").eq("id", categoryId).maybeSingle();
-          if (category?.name) categoryName = category.name;
+        if (requestedType === "blind_ranking") {
+          const { data: setting } = await supabase.from("app_settings").select("active_category_id").eq("id", 1).maybeSingle();
+          if (setting?.active_category_id) {
+            let activeQuery = supabase.from("categories")
+              .select("id,name,game_type,created_by")
+              .eq("id", setting.active_category_id)
+              .eq("game_type", "blind_ranking");
+            if (role === "creator") activeQuery = activeQuery.eq("created_by", userId);
+            const { data: activeCategory } = await activeQuery.maybeSingle();
+            if (activeCategory) {
+              categoryId = activeCategory.id;
+              categoryName = activeCategory.name;
+            }
+          }
+        }
+
+        // FMK hat absichtlich keine gemeinsame globale Aktiv-Kategorie. Ohne Namen
+        // wird das neueste passende Spiel gewählt. Für Blind Ranking dient dies als Fallback.
+        if (!categoryId) {
+          let latestQuery = supabase.from("categories")
+            .select("id,name")
+            .eq("game_type", requestedType)
+            .order("created_at", { ascending: false })
+            .limit(1);
+          if (role === "creator") latestQuery = latestQuery.eq("created_by", userId);
+          const { data: latestCategory } = await latestQuery.maybeSingle();
+          if (latestCategory) {
+            categoryId = latestCategory.id;
+            categoryName = latestCategory.name;
+          }
         }
       }
       if (categoryId && role === "creator" && !(await canManageCategory(userId, role, categoryId))) {
-        await send(token, chatId, "Die aktive Kategorie gehört einem anderen Creator. Starte eine eigene Kategorie mit <code>/blindranking Kategoriename</code>.");
+        await send(token, chatId, requestedType === "fmk"
+          ? "Dieses FMK-Spiel gehört einem anderen Creator. Starte ein eigenes Spiel mit <code>/fmk Spielname</code>."
+          : "Die aktive Kategorie gehört einem anderen Creator. Starte eine eigene Kategorie mit <code>/blindranking Kategoriename</code>.");
         return NextResponse.json({ ok: true });
       }
       if (!categoryId) {
-        await send(token, chatId, "Noch keine aktive Kategorie vorhanden. Der Admin muss zuerst eine Kategorie fertigstellen.");
+        await send(token, chatId, requestedType === "fmk"
+          ? "Noch kein fertiges FMK-Spiel vorhanden."
+          : "Noch kein fertiges Blind Ranking vorhanden.");
         return NextResponse.json({ ok: true });
       }
       const bot = await telegramApi(token, "getMe", {});
