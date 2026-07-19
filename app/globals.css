@@ -55,8 +55,8 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
 .fmk-card.is-fuck { border-color: #fb7185; }
 .fmk-card.is-marry { border-color: #f472b6; }
 .fmk-card.is-kill { border-color: #a78bfa; }
-.fmk-image-wrap { position: relative; display: flex; align-items: center; justify-content: center; min-height: 180px; overflow: hidden; background: #0b080b; }
-.fmk-image-wrap img { width: 100%; height: auto; max-height: 72vh; display: block; object-fit: contain; background: #080b11; }
+.fmk-image-wrap { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 3 / 4; overflow: hidden; background: #0b080b; }
+.fmk-image-wrap img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .fmk-assigned { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(12,7,12,.82); font-size: 22px; backdrop-filter: blur(8px); }
 .fmk-card-body { padding: 13px; }
 .fmk-card-body h2 { overflow: hidden; margin: 0 0 12px; font-size: clamp(15px, 2.5vw, 20px); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
@@ -74,12 +74,14 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
 .fmk-submit { min-height: 46px; border: 1px solid #f472b6; border-radius: 13px; padding: 0 18px; background: linear-gradient(135deg, #db2777, #9333ea); color: #fff; font-weight: 900; cursor: pointer; }
 .fmk-submit:disabled { opacity: .45; cursor: not-allowed; }
 .fmk-status { margin: 14px 0 0; color: #e7d5e3; text-align: center; }
+
 .fmk-results { margin-top: 24px; padding-top: 22px; border-top: 1px solid #3c2a38; }
 .fmk-results-heading { margin-bottom: 14px; text-align: center; }
 .fmk-results-heading h2 { margin: 5px 0 0; }
 .fmk-results-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .fmk-result-card { overflow: hidden; border: 1px solid #3e2a3a; border-radius: 18px; background: #1d141c; }
-.fmk-result-card > img { width: 100%; height: auto; max-height: 72vh; display: block; object-fit: contain; background: #080b11; }
+.fmk-result-image { display: grid; place-items: center; width: 100%; aspect-ratio: 3 / 4; overflow: hidden; background: #0b080b; }
+.fmk-result-image img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .fmk-result-card > div { padding: 12px; }
 .fmk-result-card h3 { overflow: hidden; margin: 0 0 9px; text-overflow: ellipsis; white-space: nowrap; }
 .fmk-result-card p { display: flex; justify-content: space-between; gap: 10px; margin: 6px 0 0; color: #cdbdcc; }
@@ -97,12 +99,8 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
   .fmk-action-bar { align-items: stretch; flex-direction: column; bottom: 7px; }
   .fmk-submit { width: 100%; }
   .fmk-results-grid { grid-template-columns: 1fr; }
-  .fmk-own-choice-grid { grid-template-columns: 1fr; }
-  .fmk-own-choice-card { display: grid; grid-template-columns: 110px 1fr; align-items: center; }
-  .fmk-own-choice-image { min-height: 130px; height: 100%; }
-  .fmk-own-choice-image img { max-height: 220px; }
   .fmk-result-card { display: grid; grid-template-columns: 110px 1fr; }
-  .fmk-result-card > img { height: 100%; aspect-ratio: auto; }
+  .fmk-result-image { aspect-ratio: 3 / 4; }
 }
 
 /* Budget Challenge */

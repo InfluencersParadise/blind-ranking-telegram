@@ -54,10 +54,7 @@ export async function POST(request: NextRequest) {
       const counts = new Map<string, Record<string, number>>();
       for (const item of items) counts.set(item.id, { fuck: 0, marry: 0, kill: 0 });
       for (const entry of allEntries ?? []) counts.get(entry.item_id)![entry.role] += 1;
-      previousSelection = (own ?? []).map((entry) => ({
-        itemId: entry.item_id,
-        role: entry.role
-      }));
+      previousSelection = (own ?? []).map((entry) => ({ itemId: entry.item_id, role: entry.role }));
       community = items.map((item) => ({
         itemId: item.id,
         title: item.title,

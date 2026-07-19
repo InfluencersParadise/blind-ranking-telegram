@@ -319,6 +319,7 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
     : [
         [{ text: "🏆 Blind Ranking starten", callback_data: "playbr:x" }],
         [{ text: "🔥 FMK starten", callback_data: "playfmk:x" }],
+        [{ text: "💰 Budget Challenge starten", callback_data: "playbudget:x" }],
         [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }]
       ];
 
@@ -369,6 +370,38 @@ async function categoryMenu(token: string, chatId: string | number, userId: numb
   await send(token, chatId, `<b>${gameType === "fmk" ? "🔥 FMK" : "🏆 Blind Ranking"} – Kategorien</b>\n\nTippe eine Kategorie an:`, {
     reply_markup: { inline_keyboard: [...buttons, backButton("gamesmenu:x")] }
   });
+}
+
+async function budgetGameMenu(token: string, chatId: string | number, userId: number, role: BotRole) {
+  const supabase = getSupabaseAdmin();
+  let query = supabase.from("budget_games").select("id,title,budget_amount,currency_label,is_active,budget_items(count)").order("created_at", { ascending: false });
+  if (role === "creator") query = query.eq("creator_id", userId);
+  const { data, error } = await query;
+  if (error) throw error;
+  if (!data?.length) {
+    await send(token, chatId, "Noch keine Budget-Unterkategorien vorhanden. Erstelle eine über <b>Spiele → Budget Challenge → Neues Spiel</b>.", { reply_markup: { inline_keyboard: [backButton("managebudget:x")] } });
+    return;
+  }
+  const buttons = data.map((game: any) => [{
+    text: `${game.is_active ? "✅" : "📝"} ${game.title} · ${game.budget_amount} ${game.currency_label ?? "€"} (${game.budget_items?.[0]?.count ?? 0})`,
+    callback_data: `budgetcat:${game.id}`
+  }]);
+  await send(token, chatId, "<b>💰 Budget Challenge – Unterkategorien</b>\n\nWähle ein Budget-Spiel:", { reply_markup: { inline_keyboard: [...buttons, backButton("managebudget:x")] } });
+}
+
+async function showBudgetGameActions(token: string, chatId: string | number, gameId: string, userId: number, role: BotRole) {
+  const supabase = getSupabaseAdmin();
+  let query = supabase.from("budget_games").select("id,title,budget_amount,currency_label,is_active,creator_id,budget_items(count)").eq("id", gameId);
+  if (role === "creator") query = query.eq("creator_id", userId);
+  const { data: game, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!game) return send(token, chatId, "Budget-Unterkategorie nicht gefunden oder nicht erlaubt.");
+  const count = game.budget_items?.[0]?.count ?? 0;
+  await send(token, chatId, `<b>💰 ${escapeHtml(game.title)}</b>\nBudget: <b>${game.budget_amount} ${escapeHtml(game.currency_label ?? "€")}</b>\nInfluencerinnen: <b>${count}</b>\nStatus: <b>${game.is_active ? "aktiv" : "in Bearbeitung"}</b>`, { reply_markup: { inline_keyboard: [
+    [{ text: "🎮 Spiel öffnen", callback_data: `playbudgetid:${game.id}` }],
+    [{ text: "➕ Weitere Influencerinnen", callback_data: `addbudget:${game.id}` }],
+    backButton("catsbudget:x")
+  ] } });
 }
 
 async function showCategoryActions(token: string, chatId: string | number, categoryId: string) {
@@ -553,7 +586,17 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     return send(token, chatId, "<b>🎮 Spiele verwalten</b>\n\nWähle den Spieltyp:", { reply_markup: { inline_keyboard: [
       [{ text: "🏆 Blind Ranking", callback_data: "managebr:x" }],
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "managefmk:x" }],
+      [{ text: "💰 Budget Challenge", callback_data: "managebudget:x" }],
       backButton("menuhelp:x")
+    ] } });
+  }
+  if (action === "managebudget") {
+    if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Budget-Spiele verwalten.");
+    return send(token, chatId, "<b>💰 Influencerinnen Budget Challenge</b>\n\nJedes Budget-Spiel ist eine eigene Unterkategorie.", { reply_markup: { inline_keyboard: [
+      [{ text: "➕ Neues Spiel", callback_data: "newbudget:x" }],
+      [{ text: "📂 Unterkategorien verwalten", callback_data: "catsbudget:x" }],
+      [{ text: "🎮 Aktives Spiel öffnen", callback_data: "playbudget:x" }],
+      backButton("gamesmenu:x")
     ] } });
   }
   if (action === "managebr" || action === "managefmk") {
@@ -566,6 +609,19 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     ] } });
   }
   if (action === "catsbr" || action === "catsfmk") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role, action === "catsfmk" ? "fmk" : "blind_ranking"); }
+  if (action === "catsbudget") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return budgetGameMenu(token, chatId, callback.from.id, role); }
+  if (action === "budgetcat") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return showBudgetGameActions(token, chatId, id, callback.from.id, role); }
+  if (action === "newbudget") {
+    if (role === "player") return send(token, chatId, "Nicht erlaubt.");
+    return send(token, chatId, "<b>➕ Neue Budget-Unterkategorie</b>\n\nSende jetzt:\n<code>/neuesbudget Titel | Budget</code>\n\nBeispiel:\n<code>/neuesbudget Meine Favoritinnen | 100</code>", { reply_markup: { inline_keyboard: [backButton("managebudget:x")] } });
+  }
+  if (action === "addbudget") {
+    if (role === "player") return send(token, chatId, "Nicht erlaubt.");
+    const { data: game } = await supabase.from("budget_games").select("id,creator_id,title").eq("id", id).maybeSingle();
+    if (!game || (role === "creator" && game.creator_id !== callback.from.id)) return send(token, chatId, "Nicht erlaubt.");
+    await setBudgetSession(callback.from.id, { game_id: id, mode: "awaiting_budget_photo", pending_file_id: null });
+    return send(token, chatId, `Sende jetzt ein weiteres Bild für <b>${escapeHtml(game.title)}</b> mit <code>Name | Preis</code> als Bildunterschrift.`, { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
+  }
   if (action === "menucats") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return categoryMenu(token, chatId, callback.from.id, role, "blind_ranking"); }
   if (action === "rolemenu") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return showRoleMenu(token, chatId); }
   if (action === "roleusers") { if (role !== "owner") return send(token, chatId, "Nur Owner."); return listRoleUsers(token, chatId, ownerId); }
@@ -686,6 +742,16 @@ Der Nutzer wird danach wieder Player.`, { reply_markup: { inline_keyboard: [[{ t
     await setSession(callback.from.id, { category_id: null, mode: `awaiting_new_category_name_${gameType}`, pending_file_id: null, pending_item_id: null });
     await send(token, chatId, `Sende jetzt den Namen der neuen ${gameType === "fmk" ? "FMK-" : "Blind-Ranking-"}Kategorie.`, { reply_markup: { inline_keyboard: [backButton(gameType === "fmk" ? "managefmk:x" : "managebr:x")] } });
     return;
+  }
+  if (action === "playbudget" || action === "playbudgetid") {
+    let query = supabase.from("budget_games").select("id,title,creator_id").eq("is_active", true).order("created_at", { ascending: false }).limit(1);
+    if (action === "playbudgetid") query = supabase.from("budget_games").select("id,title,creator_id").eq("id", id).eq("is_active", true).limit(1);
+    if (role === "creator") query = query.eq("creator_id", callback.from.id);
+    const { data: game } = await query.maybeSingle();
+    if (!game) return send(token, chatId, "Noch kein aktives Budget-Spiel vorhanden.");
+    const bot = await telegramApi(token, "getMe", {});
+    const deepLink = `https://t.me/${bot.username}?start=budget_${chatId}_${game.id}`;
+    return send(token, chatId, `💰 Budget Challenge <b>${escapeHtml(game.title)}</b> öffnen:`, { reply_markup: { inline_keyboard: [[{ text: "💰 Budget-Spiel öffnen", url: deepLink }], backButton("managebudget:x")] } });
   }
   if (action === "menuplay" || action === "playbr" || action === "playfmk") {
     const requestedType = action === "playfmk" ? "fmk" : "blind_ranking";
