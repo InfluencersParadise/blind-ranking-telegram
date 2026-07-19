@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Item = { id: string; name: string; image: string; price: number };
 type Community = { itemId: string; percent: number };
@@ -11,7 +11,33 @@ type Game = {
   totalVotes: number; averageSpent: number; community: Community[];
 };
 
+function useEqualImageHeight() {
+  const gridRef = useRef<HTMLElement | null>(null);
+
+  const equalize = useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const wrappers = Array.from(grid.querySelectorAll<HTMLElement>(".budget-image"));
+    wrappers.forEach((wrapper) => { wrapper.style.height = "auto"; });
+    const heights = wrappers.map((wrapper) => {
+      const image = wrapper.querySelector<HTMLImageElement>("img");
+      return image?.getBoundingClientRect().height ?? 0;
+    });
+    const maxHeight = Math.max(0, ...heights);
+    if (maxHeight > 0) wrappers.forEach((wrapper) => { wrapper.style.height = `${Math.ceil(maxHeight)}px`; });
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => requestAnimationFrame(equalize);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [equalize]);
+
+  return { gridRef, equalize };
+}
+
 export default function BudgetPage() {
+  const { gridRef, equalize } = useEqualImageHeight();
   const [game, setGame] = useState<Game | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [initData, setInitData] = useState("");
@@ -47,6 +73,10 @@ export default function BudgetPage() {
   }, []);
 
   const spent = useMemo(() => game?.items.filter((item) => selected.has(item.id)).reduce((sum, item) => sum + item.price, 0) ?? 0, [game, selected]);
+
+  useEffect(() => {
+    requestAnimationFrame(equalize);
+  }, [game, equalize]);
   const remaining = (game?.budget ?? 0) - spent;
   const validCount = Boolean(game && (!game.minSelections || selected.size >= game.minSelections) && (!game.maxSelections || selected.size <= game.maxSelections));
 
@@ -93,13 +123,13 @@ export default function BudgetPage() {
       <div><span>Auswahl</span><strong>{selected.size}</strong></div>
     </section>
 
-    <section className="budget-grid">
+    <section ref={gridRef} className="budget-grid">
       {game.items.map((item) => {
         const active = selected.has(item.id);
         const unavailable = !active && (item.price > remaining || Boolean(game.maxSelections && selected.size >= game.maxSelections));
         const percent = game.community.find((entry) => entry.itemId === item.id)?.percent ?? 0;
         return <article className={`budget-card${active ? " is-selected" : ""}${unavailable ? " is-disabled" : ""}`} key={item.id}>
-          <div className="budget-image"><img src={item.image} alt={item.name}/>{active && <span>✓</span>}</div>
+          <div className="budget-image"><img src={item.image} alt={item.name} onLoad={equalize}/>{active && <span>✓</span>}</div>
           <div className="budget-card-body"><h2>{item.name}</h2><strong className="budget-price">{money(item.price)}</strong>
             {game.alreadyVoted ? <div className="budget-community"><span>Von der Community gewählt</span><strong>{percent}%</strong></div> :
               <button type="button" disabled={unavailable || sending} onClick={() => toggle(item)}>{active ? "Entfernen" : unavailable ? "Nicht verfügbar" : "Auswählen"}</button>}

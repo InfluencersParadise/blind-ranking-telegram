@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "fuck" | "marry" | "kill";
 type Item = { id: string; title: string; image: string };
@@ -41,7 +41,33 @@ function roleLabel(role: Role) {
   return ROLES.find((entry) => entry.value === role) ?? ROLES[0];
 }
 
+function useEqualImageHeight() {
+  const gridRef = useRef<HTMLElement | null>(null);
+
+  const equalize = useCallback(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const wrappers = Array.from(grid.querySelectorAll<HTMLElement>(".fmk-image-wrap"));
+    wrappers.forEach((wrapper) => { wrapper.style.height = "auto"; });
+    const heights = wrappers.map((wrapper) => {
+      const image = wrapper.querySelector<HTMLImageElement>("img");
+      return image?.getBoundingClientRect().height ?? 0;
+    });
+    const maxHeight = Math.max(0, ...heights);
+    if (maxHeight > 0) wrappers.forEach((wrapper) => { wrapper.style.height = `${Math.ceil(maxHeight)}px`; });
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => requestAnimationFrame(equalize);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [equalize]);
+
+  return { gridRef, equalize };
+}
+
 export default function FmkPage() {
+  const { gridRef, equalize } = useEqualImageHeight();
   const [game, setGame] = useState<GameData | null>(null);
   const [loadError, setLoadError] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
@@ -200,13 +226,13 @@ export default function FmkPage() {
         <p>Vergib jede Rolle genau einmal.</p>
       </header>
 
-      <section className="fmk-grid" aria-label="FMK-Auswahl">
+      <section ref={gridRef} className="fmk-grid" aria-label="FMK-Auswahl">
         {game.items.map((item) => {
           const assigned = selection[item.id];
           return (
             <article className={`fmk-card${assigned ? ` is-${assigned}` : ""}`} key={item.id}>
               <div className="fmk-image-wrap">
-                <img src={item.image} alt={item.title} />
+                <img src={item.image} alt={item.title} onLoad={equalize} />
                 {assigned && <span className="fmk-assigned" aria-label={roleLabel(assigned).label}>{roleLabel(assigned).emoji}</span>}
               </div>
               <div className="fmk-card-body">
@@ -260,7 +286,7 @@ export default function FmkPage() {
             {game.community.map((item) => (
               <article className="fmk-result-card" key={item.itemId}>
                 <div className="fmk-result-image">
-                  <img src={item.image} alt={item.title} />
+                  <img src={item.image} alt={item.title} onLoad={equalize} />
                 </div>
                 <div>
                   <h3>{item.title}</h3>
