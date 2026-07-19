@@ -263,12 +263,43 @@ async function normalizePositions(categoryId: string) {
 }
 
 
+type BudgetSessionRow = { game_id: string | null; mode: string; pending_file_id: string | null };
+async function getBudgetSession(userId: number): Promise<BudgetSessionRow | null> {
+  const { data, error } = await getSupabaseAdmin().from("budget_admin_sessions").select("game_id,mode,pending_file_id").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data as BudgetSessionRow | null;
+}
+async function setBudgetSession(userId: number, values: Partial<BudgetSessionRow>) {
+  const existing = await getBudgetSession(userId);
+  const { error } = await getSupabaseAdmin().from("budget_admin_sessions").upsert({ user_id: userId, game_id: values.game_id !== undefined ? values.game_id : existing?.game_id ?? null, mode: values.mode ?? existing?.mode ?? "idle", pending_file_id: values.pending_file_id !== undefined ? values.pending_file_id : existing?.pending_file_id ?? null, updated_at: new Date().toISOString() });
+  if (error) throw error;
+}
+function parseBudgetItem(value: string) {
+  const parts = value.split("|").map((part) => part.trim());
+  const price = Number(parts.at(-1)?.replace(/[^0-9]/g, ""));
+  const name = parts.slice(0, -1).join(" | ").trim();
+  return name && Number.isInteger(price) && price > 0 ? { name, price } : null;
+}
+async function addBudgetItem(token: string, chatId: string | number, userId: number, gameId: string, fileId: string, label: string) {
+  const parsed = parseBudgetItem(label);
+  if (!parsed) { await setBudgetSession(userId, { game_id: gameId, mode: "awaiting_budget_item_label", pending_file_id: fileId }); await send(token, chatId, "Sende jetzt <code>Name | Preis</code>, zum Beispiel <code>Anna | 30</code>."); return; }
+  const { count, error: countError } = await getSupabaseAdmin().from("budget_items").select("id", { count: "exact", head: true }).eq("game_id", gameId);
+  if (countError) throw countError;
+  if ((count ?? 0) >= 20) { await send(token, chatId, "Maximal 20 Influencerinnen pro Budget-Spiel."); return; }
+  const uploaded = await uploadTelegramPhoto(token, fileId, userId);
+  const { error } = await getSupabaseAdmin().from("budget_items").insert({ game_id: gameId, name: parsed.name, price: parsed.price, image_url: uploaded.imageUrl, storage_path: uploaded.objectPath, sort_order: (count ?? 0) + 1 });
+  if (error) throw error;
+  await setBudgetSession(userId, { game_id: gameId, mode: "awaiting_budget_photo", pending_file_id: null });
+  await send(token, chatId, `✅ <b>${escapeHtml(parsed.name)}</b> für <b>${parsed.price}</b> hinzugefügt (${(count ?? 0) + 1}/20).\n\nSende das nächste Bild mit <code>Name | Preis</code> als Bildunterschrift oder <code>/fertigbudget</code>.`);
+}
+
 async function sendCommands(token: string, chatId: string | number, role: BotRole | null) {
   const isManager = role === "owner" || role === "creator";
   const adminSection = isManager
     ? "\n\n<b>🛠 Verwaltung</b>\n" +
       "<code>/neuekategorie Name</code> – neues Blind Ranking anlegen\n" +
       "<code>/neuesfmk Name</code> – neues FMK-Spiel anlegen\n" +
+      "<code>/neuesbudget Titel | Budget</code> – Influencerinnen-Budget anlegen\n" +
       "<code>/kategorien</code> – Blind-Ranking-Kategorien verwalten\n" +
       "<code>/bearbeiten Kategorie</code> – Kategorie direkt öffnen\n" +
       "<code>/loeschen Kategorie</code> – Kategorie löschen (mit Bestätigung)\n" +
@@ -300,6 +331,8 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
       "<code>/blindranking Kategorie</code> – bestimmtes Blind Ranking starten\n" +
       "<code>/fmk</code> – aktives Fuck, Marry, Kill starten\n" +
       "<code>/fmk Spielname</code> – bestimmtes FMK-Spiel starten\n" +
+      "<code>/budget</code> – Influencerinnen-Budget-Challenge starten\n" +
+      "<code>/budget Spielname</code> – bestimmtes Budget-Spiel starten\n" +
       "<code>/statistik Kategoriename</code> – ausführliche Punkte- und Platzstatistik\n" +
       "<code>/top</code> – meistgespielte Kategorien anzeigen\n" +
       "<code>/leaderboard</code> – aktivste Spieler dieser Gruppe anzeigen\n" +
@@ -984,6 +1017,55 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseAdmin();
     const role = await getRole(userId, ownerId);
 
+    // Eigenständige Influencerinnen-Budget-Challenge.
+    if (command === "/neuesbudget") {
+      if (!isPrivate || (role !== "owner" && role !== "creator")) { await send(token, chatId, "Erstelle Budget-Spiele als Owner oder Creator im privaten Bot-Chat."); return NextResponse.json({ ok: true }); }
+      try { await assertCreatorCanCreate(userId, role); } catch (error) { await send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); return NextResponse.json({ ok: true }); }
+      const parts = commandArg(text).split("|").map((part) => part.trim());
+      const budget = Number(parts.at(-1)?.replace(/[^0-9]/g, ""));
+      const title = parts.slice(0, -1).join(" | ").trim();
+      if (!title || !Number.isInteger(budget) || budget <= 0) { await send(token, chatId, "Bitte so senden: <code>/neuesbudget Meine Favoritinnen | 100</code>"); return NextResponse.json({ ok: true }); }
+      const { data: game, error } = await supabase.from("budget_games").insert({ creator_id: userId, title, budget_amount: budget, currency_label: "€", is_active: false }).select("id,title").single();
+      if (error) { await send(token, chatId, String(error.message).toLowerCase().includes("duplicate") ? "Du hast bereits ein Budget-Spiel mit diesem Namen." : error.message); return NextResponse.json({ ok: true }); }
+      await incrementCreatorUsage(userId, role);
+      await setBudgetSession(userId, { game_id: game.id, mode: "awaiting_budget_photo", pending_file_id: null });
+      await send(token, chatId, `✅ Budget-Spiel <b>${escapeHtml(game.title)}</b> mit <b>${budget} €</b> erstellt.\n\nSende jetzt ein Bild mit der Bildunterschrift <code>Name | Preis</code>, zum Beispiel <code>Anna | 30</code>.`);
+      return NextResponse.json({ ok: true });
+    }
+    if (["/fertigbudget", "/budgetfertig"].includes(command)) {
+      if (!isPrivate || (role !== "owner" && role !== "creator")) return NextResponse.json({ ok: true });
+      const session = await getBudgetSession(userId);
+      if (!session?.game_id) { await send(token, chatId, "Kein Budget-Spiel in Bearbeitung."); return NextResponse.json({ ok: true }); }
+      const { count } = await supabase.from("budget_items").select("id", { count: "exact", head: true }).eq("game_id", session.game_id);
+      if ((count ?? 0) < 2) { await send(token, chatId, "Füge mindestens 2 Influencerinnen hinzu."); return NextResponse.json({ ok: true }); }
+      await supabase.from("budget_games").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", session.game_id);
+      const { data: game } = await supabase.from("budget_games").select("title").eq("id", session.game_id).single();
+      await setBudgetSession(userId, { game_id: null, mode: "idle", pending_file_id: null });
+      await send(token, chatId, `✅ <b>${escapeHtml(game?.title ?? "Budget-Spiel")}</b> ist aktiv. Starte es in der Gruppe mit <code>/budget ${escapeHtml(game?.title ?? "")}</code>.`);
+      return NextResponse.json({ ok: true });
+    }
+    if (command === "/abbrechenbudget") { await setBudgetSession(userId, { game_id: null, mode: "idle", pending_file_id: null }); await send(token, chatId, "Budget-Eingabe abgebrochen."); return NextResponse.json({ ok: true }); }
+    if (isPrivate && (role === "owner" || role === "creator")) {
+      const budgetSession = await getBudgetSession(userId);
+      const bestPhoto = message.photo?.at(-1);
+      if (budgetSession?.game_id && bestPhoto && ["awaiting_budget_photo", "awaiting_budget_item_label"].includes(budgetSession.mode)) { await addBudgetItem(token, chatId, userId, budgetSession.game_id, bestPhoto.file_id, message.caption ?? ""); return NextResponse.json({ ok: true }); }
+      if (budgetSession?.game_id && budgetSession.mode === "awaiting_budget_item_label" && budgetSession.pending_file_id && text && !isCommand) { await addBudgetItem(token, chatId, userId, budgetSession.game_id, budgetSession.pending_file_id, text); return NextResponse.json({ ok: true }); }
+    }
+    if (command === "/budget" && !isPrivate) {
+      if (role === "player") { await send(token, chatId, "Nur Owner oder Creator dürfen ein Budget-Spiel starten.", topicExtra(message.message_thread_id)); return NextResponse.json({ ok: true }); }
+      const requested = commandArg(text);
+      let query = supabase.from("budget_games").select("id,title,creator_id").eq("is_active", true);
+      if (role === "creator") query = query.eq("creator_id", userId);
+      if (requested) query = query.ilike("title", requested).limit(1); else query = query.order("created_at", { ascending: false }).limit(1);
+      const { data: game } = await query.maybeSingle();
+      if (!game) { await send(token, chatId, requested ? "Budget-Spiel nicht gefunden." : "Noch kein aktives Budget-Spiel vorhanden."); return NextResponse.json({ ok: true }); }
+      const bot = await telegramApi(token, "getMe", {});
+      const deepLink = `https://t.me/${bot.username}?start=budget_${chatId}_${game.id}`;
+      const topicSettings = await getGroupTopicSettings(chatId);
+      await send(token, chatId, `💰 <b>Influencerinnen Budget Challenge</b>\nSpiel: <b>${escapeHtml(game.title)}</b>\n\nWen findest du am besten – und wen kannst du dir mit deinem Budget leisten?`, { ...topicExtra(topicSettings.poll_thread_id), reply_markup: { inline_keyboard: [[{ text: "💰 Budget-Spiel starten", url: deepLink }]] } });
+      return NextResponse.json({ ok: true });
+    }
+
     if (["/token", "/tokenmenu"].includes(command)) {
       if (!isPrivate) { await send(token, chatId, "Öffne das Token-Menü bitte im privaten Chat mit dem Bot."); return NextResponse.json({ ok: true }); }
       if (role !== "player") { await send(token, chatId, "Du bist bereits Owner oder Creator."); return NextResponse.json({ ok: true }); }
@@ -1407,7 +1489,7 @@ Neues Kontingent wählen:`, {
       }
     }
 
-    if (command !== "/blindranking" && command !== "/fmk" && command !== "/start") return NextResponse.json({ ok: true });
+    if (command !== "/blindranking" && command !== "/fmk" && command !== "/budget" && command !== "/start") return NextResponse.json({ ok: true });
     if (!isPrivate && role === "player") {
       await send(token, chatId, "Nur Owner oder Creator dürfen ein neues Spiel starten.", topicExtra(message.message_thread_id));
       return NextResponse.json({ ok: true });
@@ -1491,12 +1573,12 @@ Neues Kontingent wählen:`, {
     }
 
     const startPayload = command === "/start" ? text.split(/\s+/)[1] ?? "" : "";
-    const match = startPayload.match(/^(group|fmk)_(-?\d+)_([0-9a-f-]{36})$/i);
+    const match = startPayload.match(/^(group|fmk|budget)_(-?\d+)_([0-9a-f-]{36})$/i);
     let targetChatId = chatId;
     let categoryId: string | null = null;
-    let startGameType: "blind_ranking" | "fmk" = "blind_ranking";
+    let startGameType: "blind_ranking" | "fmk" | "budget" = "blind_ranking";
     if (match) {
-      startGameType = match[1] === "fmk" ? "fmk" : "blind_ranking";
+      startGameType = match[1] === "fmk" ? "fmk" : match[1] === "budget" ? "budget" : "blind_ranking";
       targetChatId = match[2];
       categoryId = match[3];
     } else {
@@ -1507,9 +1589,13 @@ Neues Kontingent wählen:`, {
       await send(token, chatId, "Noch keine aktive Kategorie vorhanden.");
       return NextResponse.json({ ok: true });
     }
-    const miniAppUrl = `${appUrl.replace(/\/$/, "")}${startGameType === "fmk" ? "/fmk" : ""}/?chat_id=${encodeURIComponent(targetChatId)}&category_id=${encodeURIComponent(categoryId)}`;
-    await send(token, chatId, startGameType === "fmk" ? "🔥 <b>Fuck, Marry, Kill</b>\n\nÖffne jetzt das Spiel:" : "🎲 <b>Blind Ranking</b>\n\nÖffne jetzt das Spiel:", {
-      reply_markup: { inline_keyboard: [[{ text: startGameType === "fmk" ? "🔥 FMK öffnen" : "🎮 Blind Ranking öffnen", web_app: { url: miniAppUrl } }]] }
+    const miniPath = startGameType === "fmk" ? "/fmk" : startGameType === "budget" ? "/budget" : "";
+    const idParam = startGameType === "budget" ? "game_id" : "category_id";
+    const miniAppUrl = `${appUrl.replace(/\/$/, "")}${miniPath}/?chat_id=${encodeURIComponent(targetChatId)}&${idParam}=${encodeURIComponent(categoryId)}`;
+    const title = startGameType === "fmk" ? "🔥 <b>Fuck, Marry, Kill</b>" : startGameType === "budget" ? "💰 <b>Influencerinnen Budget Challenge</b>" : "🎲 <b>Blind Ranking</b>";
+    const button = startGameType === "fmk" ? "🔥 FMK öffnen" : startGameType === "budget" ? "💰 Budget-Spiel öffnen" : "🎮 Blind Ranking öffnen";
+    await send(token, chatId, `${title}\n\nÖffne jetzt das Spiel:`, {
+      reply_markup: { inline_keyboard: [[{ text: button, web_app: { url: miniAppUrl } }]] }
     });
     return NextResponse.json({ ok: true });
   } catch (error) {

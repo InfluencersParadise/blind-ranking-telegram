@@ -134,3 +134,67 @@ update bot_users set active = false where role = 'player';
 -- Version 3.7: mehrere Spieltypen
 alter table categories add column if not exists game_type text not null default 'blind_ranking' check (game_type in ('blind_ranking','fmk'));
 create index if not exists categories_game_type_idx on categories(game_type);
+
+-- Version 3.9: eigenständige Budget Challenge für Influencerinnen
+create table if not exists budget_games (
+  id uuid primary key default gen_random_uuid(),
+  creator_id bigint not null,
+  title text not null,
+  budget_amount integer not null check (budget_amount > 0),
+  currency_label text not null default '€',
+  min_selections integer check (min_selections is null or min_selections > 0),
+  max_selections integer check (max_selections is null or max_selections > 0),
+  is_active boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(creator_id, title)
+);
+
+create table if not exists budget_items (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references budget_games(id) on delete cascade,
+  name text not null,
+  image_url text not null,
+  storage_path text,
+  price integer not null check (price > 0),
+  sort_order integer not null,
+  created_at timestamptz not null default now(),
+  unique(game_id, sort_order)
+);
+
+create table if not exists budget_votes (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references budget_games(id) on delete cascade,
+  chat_id bigint not null,
+  user_id bigint not null,
+  player_name text not null,
+  total_spent integer not null check (total_spent >= 0),
+  remaining_budget integer not null check (remaining_budget >= 0),
+  created_at timestamptz not null default now(),
+  unique(game_id, chat_id, user_id)
+);
+
+create table if not exists budget_vote_entries (
+  vote_id uuid not null references budget_votes(id) on delete cascade,
+  item_id uuid not null references budget_items(id) on delete cascade,
+  price_at_vote integer not null check (price_at_vote > 0),
+  primary key(vote_id, item_id)
+);
+
+create table if not exists budget_admin_sessions (
+  user_id bigint primary key,
+  game_id uuid references budget_games(id) on delete cascade,
+  mode text not null default 'idle',
+  pending_file_id text,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists budget_games_creator_idx on budget_games(creator_id, created_at desc);
+create index if not exists budget_items_game_idx on budget_items(game_id, sort_order);
+create index if not exists budget_votes_game_chat_idx on budget_votes(game_id, chat_id);
+
+alter table budget_games enable row level security;
+alter table budget_items enable row level security;
+alter table budget_votes enable row level security;
+alter table budget_vote_entries enable row level security;
+alter table budget_admin_sessions enable row level security;
