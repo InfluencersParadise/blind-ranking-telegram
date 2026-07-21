@@ -9,10 +9,12 @@ export default function GuessPage() {
   const [result, setResult] = useState<any>(null);
   const [hint, setHint] = useState(0);
   const resultRef = useRef<HTMLDivElement | null>(null);
-  const gameId = useMemo(
-    () => new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("game_id") ?? new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("gameId"),
+  const params = useMemo(
+    () => new URLSearchParams(typeof location !== "undefined" ? location.search : ""),
     []
   );
+  const gameId = params.get("game_id") ?? params.get("gameId");
+  const chatId = params.get("chat_id") ?? params.get("chatId");
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp as any;
@@ -72,6 +74,7 @@ export default function GuessPage() {
         gameId,
         personId: round.personId,
         answer: value,
+        chatId,
       }),
     });
     setResult(await response.json());

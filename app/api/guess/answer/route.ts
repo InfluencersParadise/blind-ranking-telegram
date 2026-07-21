@@ -74,9 +74,19 @@ export async function POST(req: NextRequest) {
       suggestion ? `Meintest du vielleicht: <b>${esc(suggestion)}</b>` : "",
     ].filter(Boolean).join("\n");
 
-    // Ergebnisse werden immer mindestens als Text an den privaten Bot-Chat gesendet.
-    // Ist die Kategorieoption aktiv, wird zusätzlich das letzte Hinweis-/Lösungsmedium verwendet.
-    const targetChatId = Number(user.id);
+    // Das Ergebnis folgt dem Startkontext:
+    // privat gestartete Spiele -> privater Bot-Chat, Gruppenstart -> dieselbe Gruppe.
+    // In Forengruppen wird das konfigurierte Ergebnis-Thema verwendet.
+    const requestedChatId = Number(body.chatId);
+    const targetChatId = Number.isSafeInteger(requestedChatId) && requestedChatId !== 0
+      ? requestedChatId
+      : Number(user.id);
+    const isGroupTarget = targetChatId < 0;
+    const { data: topic } = isGroupTarget
+      ? await sb.from("group_topic_settings").select("results_thread_id").eq("chat_id", String(targetChatId)).maybeSingle()
+      : { data: null as { results_thread_id?: number | null } | null };
+    const topicPayload = topic?.results_thread_id ? { message_thread_id: topic.results_thread_id } : {};
+
     try {
       if (game.send_images) {
         const { data: media } = await sb.from("guess_media")
@@ -88,12 +98,12 @@ export async function POST(req: NextRequest) {
         if (media?.media_url) {
           const method = media.media_type === "animation" ? "sendAnimation" : "sendPhoto";
           const field = media.media_type === "animation" ? "animation" : "photo";
-          await telegramApi(token, method, { chat_id: targetChatId, [field]: media.media_url, caption: resultText, parse_mode: "HTML" });
+          await telegramApi(token, method, { chat_id: targetChatId, ...topicPayload, [field]: media.media_url, caption: resultText, parse_mode: "HTML" });
         } else {
-          await telegramApi(token, "sendMessage", { chat_id: targetChatId, text: resultText, parse_mode: "HTML" });
+          await telegramApi(token, "sendMessage", { chat_id: targetChatId, ...topicPayload, text: resultText, parse_mode: "HTML" });
         }
       } else {
-        await telegramApi(token, "sendMessage", { chat_id: targetChatId, text: resultText, parse_mode: "HTML" });
+        await telegramApi(token, "sendMessage", { chat_id: targetChatId, ...topicPayload, text: resultText, parse_mode: "HTML" });
       }
     } catch (telegramError) {
       console.error("Rate-Ergebnis konnte nicht an Telegram gesendet werden:", telegramError);
