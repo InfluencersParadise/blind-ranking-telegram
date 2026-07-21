@@ -147,6 +147,57 @@ async function registerKnownGroup(chat: TelegramChat) {
   }, { onConflict: "chat_id" });
 }
 
+
+async function syncKnownGroups(token: string) {
+  const supabase = getSupabaseAdmin();
+  const ids = new Set<number>();
+
+  const sources = await Promise.all([
+    supabase.from("bot_groups").select("chat_id").limit(500),
+    supabase.from("group_topic_settings").select("chat_id").limit(500),
+    supabase.from("votes").select("chat_id").limit(500),
+    supabase.from("budget_votes").select("chat_id").limit(500),
+    supabase.from("guess_answers").select("chat_id").limit(500),
+  ]);
+
+  for (const source of sources) {
+    for (const row of source.data ?? []) {
+      const value = Number((row as { chat_id?: string | number }).chat_id);
+      if (Number.isSafeInteger(value) && value < 0) ids.add(value);
+    }
+  }
+
+  let synced = 0;
+  for (const chatId of ids) {
+    try {
+      const chat = await telegramApi(token, "getChat", { chat_id: chatId });
+      if (chat?.type !== "group" && chat?.type !== "supergroup") continue;
+      const bot = await telegramApi(token, "getMe", {});
+      const botMember = await telegramApi(token, "getChatMember", { chat_id: chatId, user_id: bot.id });
+      const active = !["left", "kicked"].includes(botMember?.status);
+      await supabase.from("bot_groups").upsert({
+        chat_id: chatId,
+        title: chat.title || `Gruppe ${chatId}`,
+        chat_type: chat.type,
+        active,
+        last_seen_at: new Date().toISOString(),
+      }, { onConflict: "chat_id" });
+      if (active) synced += 1;
+    } catch {
+      await supabase.from("bot_groups").update({ active: false, last_seen_at: new Date().toISOString() }).eq("chat_id", chatId);
+    }
+  }
+  return synced;
+}
+
+function miniAppUrlFor(kind: ShareGameKind, gameId: string, chatId: string | number) {
+  const raw = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || "";
+  const base = raw.startsWith("http") ? raw : `https://${raw}`;
+  const path = kind === "f" ? "/fmk" : kind === "u" ? "/budget" : kind === "g" ? "/guess" : "";
+  const idParam = kind === "u" || kind === "g" ? "game_id" : "category_id";
+  return `${base.replace(/\/$/, "")}${path}/?chat_id=${encodeURIComponent(String(chatId))}&${idParam}=${encodeURIComponent(gameId)}`;
+}
+
 async function canManageShareGame(userId: number, role: BotRole, kind: ShareGameKind, gameId: string) {
   if (role === "owner") return true;
   if (role !== "creator") return false;
@@ -195,6 +246,7 @@ async function showGroupPicker(token: string, privateChatId: string | number, us
   if (!(await canManageShareGame(userId, role, kind, gameId))) return send(token, privateChatId, "Du darfst dieses Spiel nicht starten.");
   const title = await getShareGameTitle(kind, gameId);
   if (!title) return send(token, privateChatId, "Spiel nicht gefunden.");
+  await syncKnownGroups(token);
   const { data: groups } = await getSupabaseAdmin().from("bot_groups").select("chat_id,title").eq("active", true).order("last_seen_at", { ascending: false }).limit(50);
   const rows: Array<Array<{ text: string; callback_data: string }>> = [];
   for (const group of groups ?? []) {
@@ -208,8 +260,8 @@ async function showGroupPicker(token: string, privateChatId: string | number, us
   const addUrl = `https://t.me/${bot.username}?startgroup=connect`;
   return send(token, privateChatId, `<b>📣 In Gruppe starten</b>\n\nSpiel: <b>${escapeHtml(title)}</b>\n\nEs werden nur Gruppen angezeigt, in denen du und der Bot Administrator seid.`, { reply_markup: { inline_keyboard: [
     ...rows,
+    [{ text: "🔄 Bestehende Gruppen prüfen", callback_data: `syncgrp:${kind}|${gameId}` }],
     [{ text: "➕ Bot zu einer Gruppe hinzufügen", url: addUrl }],
-    ...(rows.length ? [] : [[{ text: "🔄 Gruppen erneut prüfen", callback_data: `grp:${kind}|${gameId}` }]]),
     backButton(back)
   ] } });
 }
@@ -485,6 +537,7 @@ async function showBudgetGameActions(token: string, chatId: string | number, gam
   const count = game.budget_items?.[0]?.count ?? 0;
   const imageMode = game.send_images !== false ? "✅ Ja" : "❌ Nein";
   await send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>💰 ${escapeHtml(game.title)}</b>\nBudget: <b>${game.budget_amount} ${escapeHtml(game.currency_label ?? "€")}</b>\nInfluencerinnen: <b>${count}</b>\nStatus: <b>${game.is_active ? "aktiv" : "in Bearbeitung"}</b>\nBilder in Ergebnissen: <b>${imageMode}</b>`, { reply_markup: { inline_keyboard: [
+    [{ text: "▶️ Privat starten", callback_data: `privateplay:u|${game.id}` }],
     [{ text: "📣 In Gruppe starten", callback_data: `grp:u|${game.id}` }],
     [{ text: "🖼 Medien verwalten", callback_data: `budgetitems:${game.id}` }],
     [{ text: "✏️ Kategorie umbenennen", callback_data: `renamebudget:${game.id}` }],
@@ -509,9 +562,8 @@ async function showCategoryActions(token: string, chatId: string | number, categ
   await send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>${escapeHtml(category.name)}</b>\n${count} Medien\n${imageMode}`, {
     reply_markup: {
       inline_keyboard: [
-        ...(category.game_type === "fmk"
-          ? [[{ text: "📣 In Gruppe starten", callback_data: `grp:f|${categoryId}` }]]
-          : [[{ text: "▶️ Spiel starten", callback_data: `grp:b|${categoryId}` }]]),
+        [{ text: "▶️ Privat starten", callback_data: `privateplay:${category.game_type === "fmk" ? "f" : "b"}|${categoryId}` }],
+        [{ text: "📣 In Gruppe starten", callback_data: `grp:${category.game_type === "fmk" ? "f" : "b"}|${categoryId}` }],
         [{ text: "🖼 Medien verwalten", callback_data: `items:${categoryId}` }],
         [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
         [{ text: "📊 Ergebnisse & Statistiken", callback_data: `categorystats:${categoryId}` }],
@@ -671,6 +723,24 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
 
   if (action === "menuhelp") return sendCommands(token, chatId, role);
   if (action === "noop") return;
+  if (action === "privateplay") {
+    const [kindRaw, gameId] = id.split("|");
+    const kind = kindRaw as ShareGameKind;
+    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    const title = await getShareGameTitle(kind, gameId);
+    if (!title) return send(token, chatId, "Spiel nicht gefunden.");
+    const labels: Record<ShareGameKind, string> = { b: "🏆 Blind Ranking öffnen", f: "🔥 FMK öffnen", u: "💰 Budget-Spiel öffnen", g: "🧩 Ratespiel öffnen" };
+    return send(token, chatId, `<b>${escapeHtml(title)}</b>\n\nStarte das Spiel direkt im privaten Chat:`, { reply_markup: { inline_keyboard: [[{ text: labels[kind], web_app: { url: miniAppUrlFor(kind, gameId, chatId) } }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`)] } });
+  }
+  if (action === "syncgrp") {
+    const [kindRaw, gameId] = id.split("|");
+    const kind = kindRaw as ShareGameKind;
+    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    const count = await syncKnownGroups(token);
+    await send(token, chatId, `✅ ${count} bekannte Gruppe${count === 1 ? "" : "n"} wurden geprüft.`);
+    const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
+    return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
+  }
   if (action === "grp") {
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
@@ -785,7 +855,8 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.", { reply_markup: { inline_keyboard: [backButton("catsguess:x")] } });
     const modeLabel = g.game_mode === "single" ? "Einzelne Influencerin" : "Mehrere Influencerinnen";
     return send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>🧩 ${escapeHtml(g.title)}</b>\nModus: <b>${modeLabel}</b>\nAntwortmodus: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>\nBilder in Ergebnissen: <b>${g.send_images ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [
-      [{ text: "▶️ Spiel starten", callback_data: `grp:g|${g.id}` }],
+      [{ text: "▶️ Privat starten", callback_data: `privateplay:g|${g.id}` }],
+      [{ text: "📣 In Gruppe starten", callback_data: `grp:g|${g.id}` }],
       [{ text: "🖼 Medien verwalten", callback_data: `guesspeople:${g.id}` }],
       [{ text: "✏️ Kategorie umbenennen", callback_data: `renameguess:${g.id}` }],
       [{ text: "📊 Ergebnisse & Statistiken", callback_data: `guessstats:${g.id}` }],
@@ -893,7 +964,7 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
     if ((count ?? 0) < minimum) return send(token, chatId, `Füge zuerst mindestens ${minimum} Influencerin${minimum > 1 ? "nen" : ""} hinzu.`, { reply_markup: { inline_keyboard: [backButton(`guesspeople:${id}`)] } });
     await supabase.from("guess_games").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", id);
     await setGuessSession(callback.from.id, { game_id: null, person_id: null, mode: "idle", game_mode: null, pending_value: null });
-    return send(token, chatId, `✅ <b>${escapeHtml(g?.title ?? "Rate-Kategorie")}</b> ist fertig.`, { reply_markup: { inline_keyboard: [[{text:"📣 In Gruppe starten",callback_data:`grp:g|${id}`}],[{text:"🎮 Spiel öffnen",callback_data:`playguessid:${id}`}],backButton(`guesscat:${id}`)] } });
+    return send(token, chatId, `✅ <b>${escapeHtml(g?.title ?? "Rate-Kategorie")}</b> ist fertig.`, { reply_markup: { inline_keyboard: [[{text:"▶️ Privat starten",callback_data:`privateplay:g|${id}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:g|${id}`}],backButton(`guesscat:${id}`)] } });
   }
   if (action === "guessperson") {
     const { data:p } = await supabase.from("guess_people").select("id,game_id,display_name,aliases,social_handle").eq("id", id).maybeSingle();
@@ -984,7 +1055,7 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
     if ((count ?? 0) < 2) return send(token, chatId, "Füge zuerst mindestens zwei Influencerinnen hinzu.", { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
     await supabase.from("budget_games").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", id);
     await setBudgetSession(callback.from.id, { game_id: null, mode: "idle", pending_file_id: null });
-    return send(token, chatId, "✅ Budget-Spiel ist fertig und aktiv.", { reply_markup: { inline_keyboard: [[{ text: "📣 In Gruppe starten", callback_data: `grp:u|${id}` }], [{ text: "🎮 Spiel öffnen", callback_data: `playbudgetid:${id}` }], backButton("managebudget:x")] } });
+    return send(token, chatId, "✅ Budget-Spiel ist fertig und aktiv.", { reply_markup: { inline_keyboard: [[{ text: "▶️ Privat starten", callback_data: `privateplay:u|${id}` }], [{ text: "📣 In Gruppe starten", callback_data: `grp:u|${id}` }], backButton("managebudget:x")] } });
   }
   if (action === "cancelwizard") {
     await setSession(callback.from.id, { category_id: null, mode: "idle", pending_file_id: null, pending_item_id: null });
@@ -1810,7 +1881,7 @@ Verfügbar: ${quota.limit === null ? "unbegrenzt" : Math.max(0, quota.limit - qu
         }
         if (!isFmkCategory) await supabase.from("app_settings").upsert({ id: 1, active_category_id: session.category_id });
         await supabase.from("admin_sessions").delete().eq("user_id", userId);
-        await send(token, chatId, isFmkCategory ? `✅ Fertig. Das FMK-Spiel enthält genau 3 Bilder.` : `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv.`, { reply_markup: { inline_keyboard: [[{ text: "📣 In Gruppe starten", callback_data: `grp:${isFmkCategory ? "f" : "b"}|${session.category_id}` }], [{ text: "⚙️ Kategorie verwalten", callback_data: `cat:${session.category_id}` }], backButton("gamesmenu:x")] } });
+        await send(token, chatId, isFmkCategory ? `✅ Fertig. Das FMK-Spiel enthält genau 3 Bilder.` : `✅ Fertig. Die Kategorie mit ${count} Bildern ist jetzt aktiv.`, { reply_markup: { inline_keyboard: [[{ text: "▶️ Privat starten", callback_data: `privateplay:${isFmkCategory ? "f" : "b"}|${session.category_id}` }], [{ text: "📣 In Gruppe starten", callback_data: `grp:${isFmkCategory ? "f" : "b"}|${session.category_id}` }], [{ text: "⚙️ Kategorie verwalten", callback_data: `cat:${session.category_id}` }], backButton("gamesmenu:x")] } });
         return NextResponse.json({ ok: true });
       }
 

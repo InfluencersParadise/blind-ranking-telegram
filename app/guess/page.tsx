@@ -10,7 +10,7 @@ export default function GuessPage() {
   const [hint, setHint] = useState(0);
   const resultRef = useRef<HTMLDivElement | null>(null);
   const gameId = useMemo(
-    () => new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("gameId"),
+    () => new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("game_id") ?? new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("gameId"),
     []
   );
 

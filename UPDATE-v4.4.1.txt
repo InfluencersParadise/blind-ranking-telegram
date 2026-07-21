@@ -1,0 +1,9 @@
+Version 4.4.1
+
+- Bestehende bekannte Gruppen werden aus bot_groups, group_topic_settings und historischen Abstimmungen synchronisiert.
+- Gruppenauswahl enthält den Button „Bestehende Gruppen prüfen“.
+- Ratespiel-Gruppenstart korrigiert: game_id wird von der Mini-App richtig gelesen.
+- Alle vier Spiele können zusätzlich direkt im privaten Bot-Chat gestartet werden.
+- Privater Start ist sowohl nach der Erstellung als auch unter Meine Spiele verfügbar.
+
+Hinweis: Telegram stellt Bots keine vollständige globale Liste aller alten Gruppen bereit. Eine alte Gruppe kann automatisch wiedergefunden werden, wenn ihre Chat-ID bereits in den Projekttabellen gespeichert ist. Andernfalls muss in der alten Gruppe einmal eine Nachricht oder ein Bot-Befehl gesendet werden.
