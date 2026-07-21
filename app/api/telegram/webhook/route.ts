@@ -346,7 +346,7 @@ async function budgetGameMenu(token: string, chatId: string | number, userId: nu
   const { data, error } = await query;
   if (error) throw error;
   if (!data?.length) {
-    await send(token, chatId, "Noch keine Budget-Unterkategorien vorhanden. Erstelle eine über <b>Spiele → Budget Challenge → Neues Spiel</b>.", { reply_markup: { inline_keyboard: [backButton("managebudget:x")] } });
+    await send(token, chatId, "Noch keine Budget-Kategorien vorhanden. Erstelle eine über <b>Spiele → Budget Challenge → Neues Spiel</b>.", { reply_markup: { inline_keyboard: [backButton("managebudget:x")] } });
     return;
   }
   const buttons = data.map((game: any) => [{
@@ -362,7 +362,7 @@ async function showBudgetGameActions(token: string, chatId: string | number, gam
   if (role === "creator") query = query.eq("creator_id", userId);
   const { data: game, error } = await query.maybeSingle();
   if (error) throw error;
-  if (!game) return send(token, chatId, "Budget-Unterkategorie nicht gefunden oder nicht erlaubt.");
+  if (!game) return send(token, chatId, "Budget-Kategorie nicht gefunden oder nicht erlaubt.");
   const count = game.budget_items?.[0]?.count ?? 0;
   await send(token, chatId, `<b>💰 ${escapeHtml(game.title)}</b>\nBudget: <b>${game.budget_amount} ${escapeHtml(game.currency_label ?? "€")}</b>\nInfluencerinnen: <b>${count}</b>\nStatus: <b>${game.is_active ? "aktiv" : "in Bearbeitung"}</b>`, { reply_markup: { inline_keyboard: [
     [{ text: "🎮 Spiel öffnen", callback_data: `playbudgetid:${game.id}` }],
@@ -538,6 +538,9 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
   const [action, id] = callback.data.split(":", 2);
   const supabase = getSupabaseAdmin();
   await answerCallback(token, callback.id);
+  if (callback.message.chat?.type === "private") {
+    try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
+  }
 
   if (action === "menuhelp") return sendCommands(token, chatId, role);
   if (action === "noop") return;
@@ -554,6 +557,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🏆 Blind Ranking", callback_data: "newbr:x" }],
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "newfmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "newbudget:x" }],
+      [{ text: "🧩 Influencerin erraten", callback_data: "newguess:x" }],
       backButton("menuhelp:x")
     ] } });
   }
@@ -562,6 +566,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🏆 Blind Ranking", callback_data: "playbr:x" }],
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "playfmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "playbudget:x" }],
+      [{ text: "🧩 Influencerin erraten", callback_data: "playguess:x" }],
       backButton("menuhelp:x")
     ] } });
   }
@@ -591,14 +596,59 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🏆 Blind Ranking", callback_data: "managebr:x" }],
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "managefmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "managebudget:x" }],
+      [{ text: "🧩 Influencerin erraten", callback_data: "manageguess:x" }],
       backButton("menuhelp:x")
     ] } });
   }
+  if (action === "manageguess") {
+    if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Kategorien verwalten.");
+    return send(token, chatId, "<b>🧩 Influencerin erraten</b>", { reply_markup: { inline_keyboard: [
+      [{ text: "➕ Neue Kategorie", callback_data: "newguess:x" }],
+      [{ text: "📂 Kategorien verwalten", callback_data: "catsguess:x" }],
+      [{ text: "🎮 Aktives Spiel öffnen", callback_data: "playguess:x" }],
+      backButton("gamesmenu:x")
+    ] } });
+  }
+  if (action === "newguess") {
+    if (role === "player") return send(token, chatId, "Nicht erlaubt.");
+    return send(token, chatId, "<b>🧩 Neue Rate-Kategorie</b>\n\nDie vollständige Erstellung erfolgt aktuell über Supabase/SQL. Lege eine Kategorie in <code>guess_games</code> an und füge Influencerinnen samt Ausschnitten in <code>guess_people</code> und <code>guess_media</code> hinzu.\n\nDer spielbare Modus mit toleranter Namenseingabe ist bereits integriert.", { reply_markup: { inline_keyboard: [backButton("manageguess:x")] } });
+  }
+  if (action === "catsguess") {
+    const { data } = await supabase.from("guess_games").select("id,title,is_active").order("created_at", { ascending: false });
+    const rows = (data ?? []).map((g:any) => [{ text: `${g.is_active ? "✅" : "⏸"} ${g.title}`, callback_data: `guesscat:${g.id}` }]);
+    return send(token, chatId, "<b>🧩 Kategorien verwalten</b>", { reply_markup: { inline_keyboard: [...rows, backButton("manageguess:x")] } });
+  }
+  if (action === "guesscat") {
+    const { data:g } = await supabase.from("guess_games").select("id,title,send_images,answer_mode,hints_enabled,is_active").eq("id", id).maybeSingle();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.", { reply_markup: { inline_keyboard: [backButton("catsguess:x")] } });
+    return send(token, chatId, `<b>🧩 ${escapeHtml(g.title)}</b>\n\nAntwortmodus: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>\nBilder in Ergebnissen: <b>${g.send_images ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: g.send_images ? "📝 Ergebnisse ohne Bilder" : "🖼 Ergebnisse mit Bildern", callback_data: `toggleguessimages:${g.id}` }],
+      [{ text: "🎮 Spiel öffnen", callback_data: `playguessid:${g.id}` }],
+      backButton("catsguess:x")
+    ] } });
+  }
+  if (action === "toggleguessimages") {
+    const { data:g } = await supabase.from("guess_games").select("send_images").eq("id", id).single();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
+    await supabase.from("guess_games").update({ send_images: !g.send_images }).eq("id", id);
+    const { data:updated } = await supabase.from("guess_games").select("title,send_images,answer_mode,hints_enabled").eq("id", id).single();
+    if (!updated) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>🧩 ${escapeHtml(updated.title)}</b>\n\nAntwortmodus: <b>${updated.answer_mode}</b>\nHinweise: <b>${updated.hints_enabled ? "Ja" : "Nein"}</b>\nBilder in Ergebnissen: <b>${updated.send_images ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [[{ text: updated.send_images ? "📝 Ergebnisse ohne Bilder" : "🖼 Ergebnisse mit Bildern", callback_data: `toggleguessimages:${id}` }], [{ text: "🎮 Spiel öffnen", callback_data: `playguessid:${id}` }], backButton("catsguess:x")] } });
+  }
+  if (action === "playguess" || action === "playguessid") {
+    let q = supabase.from("guess_games").select("id,title").eq("is_active", true).order("created_at", { ascending: false }).limit(1);
+    if (action === "playguessid") q = supabase.from("guess_games").select("id,title").eq("id", id).limit(1);
+    const { data } = await q; const g = data?.[0];
+    if (!g) return send(token, chatId, "Keine aktive Rate-Kategorie gefunden.", { reply_markup: { inline_keyboard: [backButton("manageguess:x")] } });
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || "";
+    const url = `${baseUrl.startsWith("http") ? baseUrl : `https://${baseUrl}`}/guess?gameId=${g.id}`;
+    return send(token, chatId, `<b>🧩 ${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [[{ text: "🧩 Spiel öffnen", web_app: { url } }], backButton("manageguess:x")] } });
+  }
   if (action === "managebudget") {
     if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Budget-Spiele verwalten.");
-    return send(token, chatId, "<b>💰 Influencerinnen Budget Challenge</b>\n\nJedes Budget-Spiel ist eine eigene Unterkategorie.", { reply_markup: { inline_keyboard: [
+    return send(token, chatId, "<b>💰 Influencerinnen Budget Challenge</b>\n\nJedes Budget-Spiel ist eine eigene Kategorie.", { reply_markup: { inline_keyboard: [
       [{ text: "➕ Neues Spiel", callback_data: "newbudget:x" }],
-      [{ text: "📂 Unterkategorien verwalten", callback_data: "catsbudget:x" }],
+      [{ text: "📂 Kategorien verwalten", callback_data: "catsbudget:x" }],
       [{ text: "🎮 Aktives Spiel öffnen", callback_data: "playbudget:x" }],
       backButton("gamesmenu:x")
     ] } });

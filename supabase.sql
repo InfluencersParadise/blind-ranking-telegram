@@ -198,3 +198,31 @@ alter table budget_items enable row level security;
 alter table budget_votes enable row level security;
 alter table budget_vote_entries enable row level security;
 alter table budget_admin_sessions enable row level security;
+
+-- Version 4.2: Influencerin anhand von Bildausschnitten erraten
+alter table if exists categories add column if not exists send_images boolean not null default true;
+alter table if exists budget_games add column if not exists send_images boolean not null default true;
+create table if not exists guess_games (
+  id uuid primary key default gen_random_uuid(), creator_id bigint not null, title text not null,
+  answer_mode text not null default 'free_text' check (answer_mode in ('free_text','multiple_choice')),
+  hints_enabled boolean not null default true, send_images boolean not null default true,
+  is_active boolean not null default false, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists guess_people (
+  id uuid primary key default gen_random_uuid(), game_id uuid not null references guess_games(id) on delete cascade,
+  display_name text not null, aliases jsonb not null default '[]'::jsonb, social_handle text, sort_order integer not null default 0, created_at timestamptz not null default now()
+);
+create table if not exists guess_media (
+  id uuid primary key default gen_random_uuid(), person_id uuid not null references guess_people(id) on delete cascade,
+  media_url text not null, media_type text not null default 'image' check(media_type in ('image','animation')),
+  hint_level integer not null default 1, sort_order integer not null default 0, created_at timestamptz not null default now()
+);
+create table if not exists guess_answers (
+  id uuid primary key default gen_random_uuid(), game_id uuid not null references guess_games(id) on delete cascade,
+  person_id uuid not null references guess_people(id) on delete cascade, user_id bigint not null, chat_id text,
+  submitted_answer text not null, normalized_answer text not null, similarity_score numeric not null default 0,
+  is_correct boolean not null default false, points integer not null default 0, created_at timestamptz not null default now()
+);
+create index if not exists guess_people_game_idx on guess_people(game_id);
+create index if not exists guess_media_person_idx on guess_media(person_id);
+create index if not exists guess_answers_game_idx on guess_answers(game_id, chat_id);
