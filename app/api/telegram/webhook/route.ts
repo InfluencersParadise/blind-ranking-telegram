@@ -720,9 +720,13 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   }
   if (action === "guessstats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nTrefferquote, Punkte und verwendete Hinweise werden pro Kategorie ausgewertet.", { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
   if (action === "guesspeople") {
+    const { data:game } = await supabase.from("guess_games").select("game_mode").eq("id", id).maybeSingle();
     const { data:people } = await supabase.from("guess_people").select("id,display_name,sort_order").eq("game_id", id).order("sort_order");
     const rows=(people??[]).map((person:any)=>[{text:`👤 ${person.display_name}`,callback_data:`guessperson:${person.id}`}]);
-    return send(token, chatId, "<b>🖼 Medien verwalten</b>\n\nInfluencerinnen und ihre Hinweise:", { reply_markup: { inline_keyboard: [[{text:"➕ Influencerin hinzufügen",callback_data:`addguessperson:${id}`}],...rows,backButton(`guesscat:${id}`)] } });
+    const addRow = game?.game_mode === "collection" || (people?.length ?? 0) === 0
+      ? [[{text:"➕ Influencerin hinzufügen",callback_data:`addguessperson:${id}`}]]
+      : [];
+    return send(token, chatId, "<b>🖼 Medien verwalten</b>\n\nInfluencerinnen und ihre Hinweise:", { reply_markup: { inline_keyboard: [...addRow,...rows,backButton(`guesscat:${id}`)] } });
   }
   if (action === "guessmode") {
     try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
@@ -730,6 +734,11 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     return send(token, chatId, `<b>${id === "single" ? "👤 Einzelne Influencerin" : "👥 Mehrere Influencerinnen"}</b>\n\nSende jetzt einen neutralen Spielnamen, der die Lösung nicht verrät.`, { reply_markup: { inline_keyboard: [backButton("newguess:x")] } });
   }
   if (action === "addguessperson") {
+    const { data:game } = await supabase.from("guess_games").select("game_mode").eq("id", id).maybeSingle();
+    const { count } = await supabase.from("guess_people").select("id", { count: "exact", head: true }).eq("game_id", id);
+    if (game?.game_mode === "single" && (count ?? 0) >= 1) {
+      return send(token, chatId, "Diese Kategorie ist als <b>einzelne Influencerin</b> angelegt. Es kann keine weitere Influencerin hinzugefügt werden.", { reply_markup: { inline_keyboard: [backButton(`guesspeople:${id}`)] } });
+    }
     await setGuessSession(callback.from.id, { game_id: id, person_id: null, mode: "awaiting_person_name", pending_value: null });
     return send(token, chatId, "<b>➕ Influencerin hinzufügen</b>\n\nSende jetzt den korrekten Namen. Dieser Name bleibt während des Spiels verborgen.", { reply_markup: { inline_keyboard: [backButton(`guesspeople:${id}`)] } });
   }
@@ -1369,12 +1378,14 @@ export async function POST(request: NextRequest) {
         await supabase.from("guess_media").insert({ person_id: guessSession.person_id, media_url: uploaded.imageUrl, media_type: guessAnimation ? "animation" : "image", hint_level:(count??0)+1, sort_order:(count??0)+1 });
         const { data:p } = await supabase.from("guess_people").select("game_id,display_name").eq("id",guessSession.person_id).single();
         if (!p) throw new Error("Influencerin nicht gefunden.");
-        await send(token, chatId, `✅ Hinweis ${(count??0)+1} für <b>${escapeHtml(p.display_name)}</b> gespeichert.`, { reply_markup: { inline_keyboard: [
+        const { data:game } = await supabase.from("guess_games").select("game_mode").eq("id", p.game_id).maybeSingle();
+        const nextRows = [
           [{text:"➕ Weiteren Hinweis hinzufügen",callback_data:`addguessmedia:${guessSession.person_id}`}],
-          [{text:"➕ Weitere Influencerin",callback_data:`addguessperson:${p.game_id}`}],
+          ...(game?.game_mode === "collection" ? [[{text:"➕ Weitere Influencerin",callback_data:`addguessperson:${p.game_id}`}]] : []),
           [{text:"✅ Kategorie abschließen",callback_data:`finishguess:${p.game_id}`}],
           backButton(`guesspeople:${p.game_id}`)
-        ] } });
+        ];
+        await send(token, chatId, `✅ Hinweis ${(count??0)+1} für <b>${escapeHtml(p.display_name)}</b> gespeichert.`, { reply_markup: { inline_keyboard: nextRows } });
         return NextResponse.json({ ok: true });
       }
       const budgetSession = await getBudgetSession(userId);
