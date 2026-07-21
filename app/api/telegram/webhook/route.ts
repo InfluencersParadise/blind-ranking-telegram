@@ -290,63 +290,30 @@ async function addBudgetItem(token: string, chatId: string | number, userId: num
   const { error } = await getSupabaseAdmin().from("budget_items").insert({ game_id: gameId, name: parsed.name, price: parsed.price, image_url: uploaded.imageUrl, storage_path: uploaded.objectPath, sort_order: (count ?? 0) + 1 });
   if (error) throw error;
   await setBudgetSession(userId, { game_id: gameId, mode: "awaiting_budget_photo", pending_file_id: null });
-  await send(token, chatId, `✅ <b>${escapeHtml(parsed.name)}</b> für <b>${parsed.price}</b> hinzugefügt (${(count ?? 0) + 1}/20).\n\nSende das nächste Bild mit <code>Name | Preis</code> als Bildunterschrift oder <code>/fertigbudget</code>.`);
+  await send(token, chatId, `✅ <b>${escapeHtml(parsed.name)}</b> für <b>${parsed.price}</b> hinzugefügt (${(count ?? 0) + 1}/20).\n\nSende das nächste Bild mit <code>Name | Preis</code> als Bildunterschrift. Wenn du fertig bist, nutze den Button im Spielmenü oder sende <code>/fertigbudget</code>.`);
 }
 
 async function sendCommands(token: string, chatId: string | number, role: BotRole | null) {
   const isManager = role === "owner" || role === "creator";
-  const adminSection = isManager
-    ? "\n\n<b>🛠 Verwaltung</b>\n" +
-      "<code>/neuekategorie Name</code> – neues Blind Ranking anlegen\n" +
-      "<code>/neuesfmk Name</code> – neues FMK-Spiel anlegen\n" +
-      "<code>/neuesbudget Titel | Budget</code> – Influencerinnen-Budget anlegen\n" +
-      "<code>/kategorien</code> – Blind-Ranking-Kategorien verwalten\n" +
-      "<code>/bearbeiten Kategorie</code> – Kategorie direkt öffnen\n" +
-      "<code>/loeschen Kategorie</code> – Kategorie löschen (mit Bestätigung)\n" +
-      "<code>/fertig</code> – Bearbeitung abschließen und aktivieren\n" +
-      "<code>/abbrechen</code> – aktuelle Eingabe abbrechen\n\n" +
-      "<b>🖼 Bilder</b>\n" +
-      "Sende ein Bild im privaten Chat. Den Namen kannst du direkt als Bildunterschrift mitsenden.\n" +
-      "Pro Kategorie sind 2 bis 30 Bilder möglich. In der Kategorienverwaltung kannst du Ergebnisbilder ein- oder ausschalten."
-    : "";
-
-  const keyboard = isManager
+  const keyboard: Array<Array<{ text: string; callback_data: string }>> = isManager
     ? [
-        [{ text: "🎮 Spiele", callback_data: "gamesmenu:x" }],
-        [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }],
+        [{ text: "➕ Neues Spiel erstellen", callback_data: "createmenu:x" }],
+        [{ text: "🎮 Meine Spiele", callback_data: "gamesmenu:x" }],
+        [{ text: "▶️ Spiel starten", callback_data: "playmenu:x" }],
+        [{ text: "📊 Statistiken", callback_data: "statsmenu:x" }],
+        [{ text: "⚙️ Konto & Einstellungen", callback_data: "accountmenu:x" }],
         ...(role === "owner" ? [[{ text: "🔐 Rollen & Tokens", callback_data: "rolemenu:x" }]] : [])
       ]
     : [
-        [{ text: "🏆 Blind Ranking starten", callback_data: "playbr:x" }],
-        [{ text: "🔥 FMK starten", callback_data: "playfmk:x" }],
-        [{ text: "💰 Budget Challenge starten", callback_data: "playbudget:x" }],
+        [{ text: "▶️ Spiel starten", callback_data: "playmenu:x" }],
+        [{ text: "📊 Statistiken", callback_data: "statsmenu:x" }],
         [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }]
       ];
 
-  await send(
-    token,
-    chatId,
-    "<b>🤖 Blind Ranking – Befehle</b>\n\n" +
-      "<b>🎮 Spiel</b>\n" +
-      "<code>/blindranking</code> – aktive Kategorie starten\n" +
-      "<code>/blindranking Kategorie</code> – bestimmtes Blind Ranking starten\n" +
-      "<code>/fmk</code> – aktives Fuck, Marry, Kill starten\n" +
-      "<code>/fmk Spielname</code> – bestimmtes FMK-Spiel starten\n" +
-      "<code>/budget</code> – Influencerinnen-Budget-Challenge starten\n" +
-      "<code>/budget Spielname</code> – bestimmtes Budget-Spiel starten\n" +
-      "<code>/statistik Kategoriename</code> – ausführliche Punkte- und Platzstatistik\n" +
-      "<code>/top</code> – meistgespielte Kategorien anzeigen\n" +
-      "<code>/leaderboard</code> – aktivste Spieler dieser Gruppe anzeigen\n" +
-      "<code>/history</code> – letzte Abstimmungen dieser Gruppe anzeigen\n" +
-      "<code>/themen</code> – Zielthemen für Umfrage und Ergebnisse anzeigen\n" +
-      "<code>/setumfragethema</code> – aktuelles Thema für Umfrage-Links festlegen\n" +
-      "<code>/setergebnisthema</code> – aktuelles Thema für Ergebnisse festlegen\n" +
-      "<code>/themenreset</code> – beide Zielthemen zurücksetzen\n" +
-      "<code>/id</code> – deine persönliche Telegram-ID anzeigen\n" +
-      "<code>/aktivieren TOKEN</code> – einmaligen Creator-Token einlösen\n" +
-      (role === "owner" ? "<code>/rollen</code> – Rollen- und Tokenverwaltung öffnen\n" : "") +
-      "<code>/commands</code> – diese Übersicht anzeigen" +
-      adminSection,
+  await send(token, chatId,
+    `<b>🎮 Game Hub</b>
+
+Willkommen! Wähle einfach einen Bereich aus. Commands sind nur noch als schnelle Abkürzung gedacht.`,
     { reply_markup: { inline_keyboard: keyboard } }
   );
 }
@@ -581,9 +548,46 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
 
 Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</code>.`, { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
   }
+  if (action === "createmenu") {
+    if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Spiele erstellen.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
+    return send(token, chatId, "<b>➕ Neues Spiel erstellen</b>\n\nWelchen Spieltyp möchtest du anlegen?", { reply_markup: { inline_keyboard: [
+      [{ text: "🏆 Blind Ranking", callback_data: "newbr:x" }],
+      [{ text: "🔥 Fuck, Marry, Kill", callback_data: "newfmk:x" }],
+      [{ text: "💰 Budget Challenge", callback_data: "newbudget:x" }],
+      backButton("menuhelp:x")
+    ] } });
+  }
+  if (action === "playmenu") {
+    return send(token, chatId, "<b>▶️ Spiel starten</b>\n\nWähle den Spieltyp:", { reply_markup: { inline_keyboard: [
+      [{ text: "🏆 Blind Ranking", callback_data: "playbr:x" }],
+      [{ text: "🔥 Fuck, Marry, Kill", callback_data: "playfmk:x" }],
+      [{ text: "💰 Budget Challenge", callback_data: "playbudget:x" }],
+      backButton("menuhelp:x")
+    ] } });
+  }
+  if (action === "statsmenu") {
+    return send(token, chatId, "<b>📊 Statistiken</b>\n\nDie ausführlichen Statistiken bleiben vorerst über kurze Schnellbefehle erreichbar:", { reply_markup: { inline_keyboard: [
+      [{ text: "🏆 Top Spiele", callback_data: "quickhelp:top" }],
+      [{ text: "👥 Leaderboard", callback_data: "quickhelp:leaderboard" }],
+      [{ text: "🕘 Letzte Abstimmungen", callback_data: "quickhelp:history" }],
+      backButton("menuhelp:x")
+    ] } });
+  }
+  if (action === "quickhelp") {
+    const commands: Record<string,string> = { top: "/top", leaderboard: "/leaderboard", history: "/history", id: "/id" };
+    const command = commands[id] ?? "/commands";
+    return send(token, chatId, `Sende <code>${command}</code> in der Gruppe.`, { reply_markup: { inline_keyboard: [backButton("statsmenu:x")] } });
+  }
+  if (action === "accountmenu") {
+    return send(token, chatId, "<b>⚙️ Konto & Einstellungen</b>", { reply_markup: { inline_keyboard: [
+      [{ text: "🪪 Meine Telegram-ID", callback_data: "quickhelp:id" }],
+      [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }],
+      backButton("menuhelp:x")
+    ] } });
+  }
   if (action === "gamesmenu") {
     if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Spiele verwalten.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
-    return send(token, chatId, "<b>🎮 Spiele verwalten</b>\n\nWähle den Spieltyp:", { reply_markup: { inline_keyboard: [
+    return send(token, chatId, "<b>🎮 Meine Spiele</b>\n\nWelchen Spieltyp möchtest du verwalten?", { reply_markup: { inline_keyboard: [
       [{ text: "🏆 Blind Ranking", callback_data: "managebr:x" }],
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "managefmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "managebudget:x" }],
@@ -613,7 +617,33 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   if (action === "budgetcat") { if (role === "player") return send(token, chatId, "Nicht erlaubt."); return showBudgetGameActions(token, chatId, id, callback.from.id, role); }
   if (action === "newbudget") {
     if (role === "player") return send(token, chatId, "Nicht erlaubt.");
-    return send(token, chatId, "<b>➕ Neue Budget-Unterkategorie</b>\n\nSende jetzt:\n<code>/neuesbudget Titel | Budget</code>\n\nBeispiel:\n<code>/neuesbudget Meine Favoritinnen | 100</code>", { reply_markup: { inline_keyboard: [backButton("managebudget:x")] } });
+    try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
+    await setBudgetSession(callback.from.id, { game_id: null, mode: "awaiting_budget_title", pending_file_id: null });
+    return send(token, chatId, "<b>💰 Neue Budget Challenge</b>\n\nWie soll das Spiel heißen?\n\nSende jetzt nur den Titel.", { reply_markup: { inline_keyboard: [[{ text: "✖️ Abbrechen", callback_data: "cancelwizard:x" }], backButton("createmenu:x")] } });
+  }
+  if (action === "budgetamount") {
+    if (role === "player") return send(token, chatId, "Nicht erlaubt.");
+    const amount = Number(id);
+    const session = await getBudgetSession(callback.from.id);
+    const title = session?.pending_file_id?.trim();
+    if (!title || !Number.isInteger(amount) || amount <= 0) return send(token, chatId, "Die Eingabe ist nicht mehr gültig. Starte die Erstellung erneut.", { reply_markup: { inline_keyboard: [backButton("createmenu:x")] } });
+    const { data: game, error } = await supabase.from("budget_games").insert({ creator_id: callback.from.id, title, budget_amount: amount, currency_label: "€", is_active: false }).select("id,title").single();
+    if (error) throw error;
+    await incrementCreatorUsage(callback.from.id, role);
+    await setBudgetSession(callback.from.id, { game_id: game.id, mode: "awaiting_budget_photo", pending_file_id: null });
+    return send(token, chatId, `✅ <b>${escapeHtml(game.title)}</b> wurde mit <b>${amount} €</b> angelegt.\n\nSende jetzt das erste Bild. Schreibe als Bildunterschrift <code>Name | Preis</code>.`, { reply_markup: { inline_keyboard: [[{ text: "✅ Erstellung abschließen", callback_data: `finishbudget:${game.id}` }], [{ text: "✖️ Abbrechen", callback_data: "cancelwizard:x" }], backButton(`budgetcat:${game.id}`)] } });
+  }
+  if (action === "finishbudget") {
+    const { count } = await supabase.from("budget_items").select("id", { count: "exact", head: true }).eq("game_id", id);
+    if ((count ?? 0) < 2) return send(token, chatId, "Füge zuerst mindestens zwei Influencerinnen hinzu.", { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
+    await supabase.from("budget_games").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", id);
+    await setBudgetSession(callback.from.id, { game_id: null, mode: "idle", pending_file_id: null });
+    return send(token, chatId, "✅ Budget-Spiel ist fertig und aktiv.", { reply_markup: { inline_keyboard: [[{ text: "🎮 Spiel öffnen", callback_data: `playbudgetid:${id}` }], backButton("managebudget:x")] } });
+  }
+  if (action === "cancelwizard") {
+    await setSession(callback.from.id, { category_id: null, mode: "idle", pending_file_id: null, pending_item_id: null });
+    await setBudgetSession(callback.from.id, { game_id: null, mode: "idle", pending_file_id: null });
+    return send(token, chatId, "Erstellung abgebrochen.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
   }
   if (action === "addbudget") {
     if (role === "player") return send(token, chatId, "Nicht erlaubt.");
@@ -740,7 +770,7 @@ Der Nutzer wird danach wieder Player.`, { reply_markup: { inline_keyboard: [[{ t
     try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
     const gameType = action === "newfmk" ? "fmk" : "blind_ranking";
     await setSession(callback.from.id, { category_id: null, mode: `awaiting_new_category_name_${gameType}`, pending_file_id: null, pending_item_id: null });
-    await send(token, chatId, `Sende jetzt den Namen der neuen ${gameType === "fmk" ? "FMK-" : "Blind-Ranking-"}Kategorie.`, { reply_markup: { inline_keyboard: [backButton(gameType === "fmk" ? "managefmk:x" : "managebr:x")] } });
+    await send(token, chatId, `<b>${gameType === "fmk" ? "🔥 Neues FMK-Spiel" : "🏆 Neues Blind Ranking"}</b>\n\nWie soll das Spiel heißen?\n\nSende jetzt nur den Titel.`, { reply_markup: { inline_keyboard: [[{ text: "✖️ Abbrechen", callback_data: "cancelwizard:x" }], backButton("createmenu:x")] } });
     return;
   }
   if (action === "playbudget" || action === "playbudgetid") {
@@ -1113,6 +1143,17 @@ export async function POST(request: NextRequest) {
     if (command === "/abbrechenbudget") { await setBudgetSession(userId, { game_id: null, mode: "idle", pending_file_id: null }); await send(token, chatId, "Budget-Eingabe abgebrochen."); return NextResponse.json({ ok: true }); }
     if (isPrivate && (role === "owner" || role === "creator")) {
       const budgetSession = await getBudgetSession(userId);
+      if (budgetSession?.mode === "awaiting_budget_title" && text && !isCommand) {
+        await setBudgetSession(userId, { game_id: null, mode: "awaiting_budget_amount", pending_file_id: text.trim() });
+        await send(token, chatId, `<b>Budget für ${escapeHtml(text.trim())}</b>\n\nWähle einen Betrag:`, { reply_markup: { inline_keyboard: [
+          [{ text: "50 €", callback_data: "budgetamount:50" }, { text: "100 €", callback_data: "budgetamount:100" }],
+          [{ text: "200 €", callback_data: "budgetamount:200" }, { text: "500 €", callback_data: "budgetamount:500" }],
+          [{ text: "1.000 €", callback_data: "budgetamount:1000" }],
+          [{ text: "✖️ Abbrechen", callback_data: "cancelwizard:x" }],
+          backButton("createmenu:x")
+        ] } });
+        return NextResponse.json({ ok: true });
+      }
       const bestPhoto = message.photo?.at(-1);
       if (budgetSession?.game_id && bestPhoto && ["awaiting_budget_photo", "awaiting_budget_item_label"].includes(budgetSession.mode)) { await addBudgetItem(token, chatId, userId, budgetSession.game_id, bestPhoto.file_id, message.caption ?? ""); return NextResponse.json({ ok: true }); }
       if (budgetSession?.game_id && budgetSession.mode === "awaiting_budget_item_label" && budgetSession.pending_file_id && text && !isCommand) { await addBudgetItem(token, chatId, userId, budgetSession.game_id, budgetSession.pending_file_id, text); return NextResponse.json({ ok: true }); }
