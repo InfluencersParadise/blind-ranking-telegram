@@ -274,6 +274,29 @@ async function setBudgetSession(userId: number, values: Partial<BudgetSessionRow
   const { error } = await getSupabaseAdmin().from("budget_admin_sessions").upsert({ user_id: userId, game_id: values.game_id !== undefined ? values.game_id : existing?.game_id ?? null, mode: values.mode ?? existing?.mode ?? "idle", pending_file_id: values.pending_file_id !== undefined ? values.pending_file_id : existing?.pending_file_id ?? null, updated_at: new Date().toISOString() });
   if (error) throw error;
 }
+
+type GuessSessionRow = { game_id: string | null; person_id: string | null; mode: string; game_mode: string | null; pending_value: string | null };
+async function getGuessSession(userId: number): Promise<GuessSessionRow | null> {
+  const { data, error } = await getSupabaseAdmin().from("guess_admin_sessions").select("game_id,person_id,mode,game_mode,pending_value").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data as GuessSessionRow | null;
+}
+async function setGuessSession(userId: number, values: Partial<GuessSessionRow>) {
+  const existing = await getGuessSession(userId);
+  const { error } = await getSupabaseAdmin().from("guess_admin_sessions").upsert({
+    user_id: userId,
+    game_id: values.game_id !== undefined ? values.game_id : existing?.game_id ?? null,
+    person_id: values.person_id !== undefined ? values.person_id : existing?.person_id ?? null,
+    mode: values.mode ?? existing?.mode ?? "idle",
+    game_mode: values.game_mode !== undefined ? values.game_mode : existing?.game_mode ?? null,
+    pending_value: values.pending_value !== undefined ? values.pending_value : existing?.pending_value ?? null,
+    updated_at: new Date().toISOString()
+  });
+  if (error) throw error;
+}
+function normalizedGuessName(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/@/g, "").replace(/[^a-z0-9äöüß]+/gi, " ").trim();
+}
 function parseBudgetItem(value: string) {
   const parts = value.split("|").map((part) => part.trim());
   const price = Number(parts.at(-1)?.replace(/[^0-9]/g, ""));
@@ -353,20 +376,26 @@ async function budgetGameMenu(token: string, chatId: string | number, userId: nu
     text: `${game.is_active ? "✅" : "📝"} ${game.title} · ${game.budget_amount} ${game.currency_label ?? "€"} (${game.budget_items?.[0]?.count ?? 0})`,
     callback_data: `budgetcat:${game.id}`
   }]);
-  await send(token, chatId, "<b>💰 Budget Challenge – Unterkategorien</b>\n\nWähle ein Budget-Spiel:", { reply_markup: { inline_keyboard: [...buttons, backButton("managebudget:x")] } });
+  await send(token, chatId, "<b>💰 Budget Challenge – Kategorien</b>\n\nWähle eine Kategorie:", { reply_markup: { inline_keyboard: [...buttons, backButton("managebudget:x")] } });
 }
 
 async function showBudgetGameActions(token: string, chatId: string | number, gameId: string, userId: number, role: BotRole) {
   const supabase = getSupabaseAdmin();
-  let query = supabase.from("budget_games").select("id,title,budget_amount,currency_label,is_active,creator_id,budget_items(count)").eq("id", gameId);
+  let query = supabase.from("budget_games").select("id,title,budget_amount,currency_label,is_active,creator_id,send_images,budget_items(count)").eq("id", gameId);
   if (role === "creator") query = query.eq("creator_id", userId);
   const { data: game, error } = await query.maybeSingle();
   if (error) throw error;
   if (!game) return send(token, chatId, "Budget-Kategorie nicht gefunden oder nicht erlaubt.");
   const count = game.budget_items?.[0]?.count ?? 0;
-  await send(token, chatId, `<b>💰 ${escapeHtml(game.title)}</b>\nBudget: <b>${game.budget_amount} ${escapeHtml(game.currency_label ?? "€")}</b>\nInfluencerinnen: <b>${count}</b>\nStatus: <b>${game.is_active ? "aktiv" : "in Bearbeitung"}</b>`, { reply_markup: { inline_keyboard: [
-    [{ text: "🎮 Spiel öffnen", callback_data: `playbudgetid:${game.id}` }],
-    [{ text: "➕ Weitere Influencerinnen", callback_data: `addbudget:${game.id}` }],
+  const imageMode = game.send_images !== false ? "✅ Ja" : "❌ Nein";
+  await send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>💰 ${escapeHtml(game.title)}</b>\nBudget: <b>${game.budget_amount} ${escapeHtml(game.currency_label ?? "€")}</b>\nInfluencerinnen: <b>${count}</b>\nStatus: <b>${game.is_active ? "aktiv" : "in Bearbeitung"}</b>\nBilder in Ergebnissen: <b>${imageMode}</b>`, { reply_markup: { inline_keyboard: [
+    [{ text: "▶️ Spiel starten", callback_data: `playbudgetid:${game.id}` }],
+    [{ text: "🖼 Medien verwalten", callback_data: `budgetitems:${game.id}` }],
+    [{ text: "✏️ Kategorie umbenennen", callback_data: `renamebudget:${game.id}` }],
+    [{ text: "📊 Ergebnisse & Statistiken", callback_data: `budgetstats:${game.id}` }],
+    [{ text: "⚙️ Ergebnis-Einstellungen", callback_data: `budgetresults:${game.id}` }],
+    [{ text: "🎮 Spieleinstellungen", callback_data: `budgetsettings:${game.id}` }],
+    [{ text: "🗑 Kategorie löschen", callback_data: `deletebudgetask:${game.id}` }],
     backButton("catsbudget:x")
   ] } });
 }
@@ -381,17 +410,19 @@ async function showCategoryActions(token: string, chatId: string | number, categ
   }
   const count = await categoryCount(categoryId);
   const imageMode = category.send_images !== false ? "🖼 Bilder werden gesendet" : "📝 Nur Text wird gesendet";
-  await send(token, chatId, `<b>${escapeHtml(category.name)}</b>\n${count} Bilder\n${imageMode}`, {
+  await send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>${escapeHtml(category.name)}</b>\n${count} Medien\n${imageMode}`, {
     reply_markup: {
       inline_keyboard: [
         ...(category.game_type === "fmk"
-          ? [[{ text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }]]
-          : [[{ text: "✅ Aktivieren", callback_data: `activate:${categoryId}` }, { text: "➕ Bild hinzufügen", callback_data: `add:${categoryId}` }]]),
-        [{ text: "🖼 Bilder verwalten", callback_data: `items:${categoryId}` }],
-        [{ text: category.send_images !== false ? "📝 Ergebnis ohne Bilder" : "🖼 Ergebnis mit Bildern", callback_data: `toggleimages:${categoryId}` }],
+          ? [[{ text: "▶️ Spiel starten", callback_data: `playfmkid:${categoryId}` }]]
+          : [[{ text: "▶️ Spiel starten", callback_data: `activate:${categoryId}` }]]),
+        [{ text: "🖼 Medien verwalten", callback_data: `items:${categoryId}` }],
         [{ text: "✏️ Kategorie umbenennen", callback_data: `renamecat:${categoryId}` }],
+        [{ text: "📊 Ergebnisse & Statistiken", callback_data: `categorystats:${categoryId}` }],
+        [{ text: "⚙️ Ergebnis-Einstellungen", callback_data: `resultsettings:${categoryId}` }],
+        [{ text: "🎮 Spieleinstellungen", callback_data: `gamesettings:${categoryId}` }],
         [{ text: "🗑 Kategorie löschen", callback_data: `delcatask:${categoryId}` }],
-        backButton(category.game_type === "fmk" ? "managefmk:x" : "managebr:x")
+        backButton(category.game_type === "fmk" ? "catsfmk:x" : "catsbr:x")
       ]
     }
   });
@@ -611,7 +642,11 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   }
   if (action === "newguess") {
     if (role === "player") return send(token, chatId, "Nicht erlaubt.");
-    return send(token, chatId, "<b>🧩 Neue Rate-Kategorie</b>\n\nDie vollständige Erstellung erfolgt aktuell über Supabase/SQL. Lege eine Kategorie in <code>guess_games</code> an und füge Influencerinnen samt Ausschnitten in <code>guess_people</code> und <code>guess_media</code> hinzu.\n\nDer spielbare Modus mit toleranter Namenseingabe ist bereits integriert.", { reply_markup: { inline_keyboard: [backButton("manageguess:x")] } });
+    return send(token, chatId, "<b>🧩 Neue Rate-Kategorie</b>\n\nWelche Art möchtest du erstellen?", { reply_markup: { inline_keyboard: [
+      [{ text: "👤 Einzelne Influencerin", callback_data: "guessmode:single" }],
+      [{ text: "👥 Mehrere Influencerinnen", callback_data: "guessmode:collection" }],
+      backButton("manageguess:x")
+    ] } });
   }
   if (action === "catsguess") {
     const { data } = await supabase.from("guess_games").select("id,title,is_active").order("created_at", { ascending: false });
@@ -619,13 +654,121 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     return send(token, chatId, "<b>🧩 Kategorien verwalten</b>", { reply_markup: { inline_keyboard: [...rows, backButton("manageguess:x")] } });
   }
   if (action === "guesscat") {
-    const { data:g } = await supabase.from("guess_games").select("id,title,send_images,answer_mode,hints_enabled,is_active").eq("id", id).maybeSingle();
+    const { data:g } = await supabase.from("guess_games").select("id,title,send_images,answer_mode,hints_enabled,is_active,game_mode").eq("id", id).maybeSingle();
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.", { reply_markup: { inline_keyboard: [backButton("catsguess:x")] } });
-    return send(token, chatId, `<b>🧩 ${escapeHtml(g.title)}</b>\n\nAntwortmodus: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>\nBilder in Ergebnissen: <b>${g.send_images ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [
-      [{ text: g.send_images ? "📝 Ergebnisse ohne Bilder" : "🖼 Ergebnisse mit Bildern", callback_data: `toggleguessimages:${g.id}` }],
-      [{ text: "🎮 Spiel öffnen", callback_data: `playguessid:${g.id}` }],
+    const modeLabel = g.game_mode === "single" ? "Einzelne Influencerin" : "Mehrere Influencerinnen";
+    return send(token, chatId, `<b>⚙️ Kategorie verwalten</b>\n\n<b>🧩 ${escapeHtml(g.title)}</b>\nModus: <b>${modeLabel}</b>\nAntwortmodus: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>\nBilder in Ergebnissen: <b>${g.send_images ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: "▶️ Spiel starten", callback_data: `playguessid:${g.id}` }],
+      [{ text: "🖼 Medien verwalten", callback_data: `guesspeople:${g.id}` }],
+      [{ text: "✏️ Kategorie umbenennen", callback_data: `renameguess:${g.id}` }],
+      [{ text: "📊 Ergebnisse & Statistiken", callback_data: `guessstats:${g.id}` }],
+      [{ text: "⚙️ Ergebnis-Einstellungen", callback_data: `guessresults:${g.id}` }],
+      [{ text: "🎮 Spieleinstellungen", callback_data: `guesssettings:${g.id}` }],
+      [{ text: "🗑 Kategorie löschen", callback_data: `deleteguessask:${g.id}` }],
       backButton("catsguess:x")
     ] } });
+  }
+  if (action === "resultsettings") {
+    const { data:c } = await supabase.from("categories").select("id,name,send_images").eq("id", id).maybeSingle();
+    if (!c) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(c.name)}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: `🖼 Bilder mitsenden: ${c.send_images !== false ? "✅ Ja" : "❌ Nein"}`, callback_data: `toggleimages:${id}` }],
+      backButton(`cat:${id}`)
+    ] } });
+  }
+  if (action === "gamesettings") {
+    const { data:c } = await supabase.from("categories").select("name,game_type").eq("id", id).maybeSingle();
+    if (!c) return send(token, chatId, "Kategorie nicht gefunden.");
+    const lines = c.game_type === "fmk" ? "Genau 3 Medien · jede Rolle einmal" : "Reihenfolge zufällig · Rangplätze entsprechen der Medienanzahl";
+    return send(token, chatId, `<b>🎮 Spieleinstellungen</b>\n\n<b>${escapeHtml(c.name)}</b>\n${lines}`, { reply_markup: { inline_keyboard: [backButton(`cat:${id}`)] } });
+  }
+  if (action === "categorystats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nDie Kategorie-Statistiken werden aus den gespeicherten Abstimmungen berechnet.", { reply_markup: { inline_keyboard: [backButton(`cat:${id}`)] } });
+  if (action === "budgetresults") {
+    const { data:g } = await supabase.from("budget_games").select("title,send_images").eq("id", id).maybeSingle();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: `🖼 Bilder mitsenden: ${g.send_images !== false ? "✅ Ja" : "❌ Nein"}`, callback_data: `togglebudgetimages:${id}` }],
+      backButton(`budgetcat:${id}`)
+    ] } });
+  }
+  if (action === "togglebudgetimages") {
+    const { data:g } = await supabase.from("budget_games").select("send_images").eq("id", id).single();
+    await supabase.from("budget_games").update({ send_images: g?.send_images === false }).eq("id", id);
+    return showBudgetGameActions(token, chatId, id, callback.from.id, role);
+  }
+  if (action === "budgetsettings") {
+    const { data:g } = await supabase.from("budget_games").select("title,budget_amount,currency_label,min_selections,max_selections").eq("id", id).maybeSingle();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>🎮 Spieleinstellungen</b>\n\nBudget: <b>${g.budget_amount} ${escapeHtml(g.currency_label ?? "€")}</b>\nMinimum: <b>${g.min_selections ?? "frei"}</b>\nMaximum: <b>${g.max_selections ?? "frei"}</b>`, { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
+  }
+  if (action === "budgetstats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nAuswahlquoten, Durchschnittsausgaben und Restbudget werden pro Kategorie ausgewertet.", { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
+  if (action === "budgetitems") {
+    const { data:items } = await supabase.from("budget_items").select("id,name,price,image_url,sort_order").eq("game_id", id).order("sort_order");
+    for (const item of items ?? []) await telegramApi(token, "sendPhoto", { chat_id: chatId, photo: item.image_url, caption: `${item.sort_order}. ${item.name} · ${item.price}` });
+    const rows=(items??[]).map((item:any)=>[{text:`${item.sort_order}. ${item.name} · ${item.price}`,callback_data:`budgetitem:${item.id}`}]);
+    return send(token, chatId, "<b>🖼 Medien verwalten</b>", { reply_markup: { inline_keyboard: [[{text:"➕ Bild oder GIF hinzufügen",callback_data:`addbudget:${id}`}],...rows,backButton(`budgetcat:${id}`)] } });
+  }
+  if (action === "guessresults") {
+    const { data:g } = await supabase.from("guess_games").select("title,send_images").eq("id", id).maybeSingle();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [[{ text: `🖼 Bilder mitsenden: ${g.send_images ? "✅ Ja" : "❌ Nein"}`, callback_data: `toggleguessimages:${id}` }], backButton(`guesscat:${id}`)] } });
+  }
+  if (action === "guesssettings") {
+    const { data:g } = await supabase.from("guess_games").select("title,answer_mode,hints_enabled,game_mode").eq("id", id).maybeSingle();
+    if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
+    return send(token, chatId, `<b>🎮 Spieleinstellungen</b>\n\nModus: <b>${g.game_mode === "single" ? "Einzel" : "Sammlung"}</b>\nAntwort: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
+  }
+  if (action === "guessstats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nTrefferquote, Punkte und verwendete Hinweise werden pro Kategorie ausgewertet.", { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
+  if (action === "guesspeople") {
+    const { data:people } = await supabase.from("guess_people").select("id,display_name,sort_order").eq("game_id", id).order("sort_order");
+    const rows=(people??[]).map((person:any)=>[{text:`👤 ${person.display_name}`,callback_data:`guessperson:${person.id}`}]);
+    return send(token, chatId, "<b>🖼 Medien verwalten</b>\n\nInfluencerinnen und ihre Hinweise:", { reply_markup: { inline_keyboard: [[{text:"➕ Influencerin hinzufügen",callback_data:`addguessperson:${id}`}],...rows,backButton(`guesscat:${id}`)] } });
+  }
+  if (action === "guessmode") {
+    try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
+    await supabase.from("guess_admin_sessions").upsert({ user_id: callback.from.id, mode: "awaiting_title", game_mode: id, updated_at: new Date().toISOString() });
+    return send(token, chatId, `<b>${id === "single" ? "👤 Einzelne Influencerin" : "👥 Mehrere Influencerinnen"}</b>\n\nSende jetzt einen neutralen Spielnamen, der die Lösung nicht verrät.`, { reply_markup: { inline_keyboard: [backButton("newguess:x")] } });
+  }
+  if (action === "addguessperson") {
+    await setGuessSession(callback.from.id, { game_id: id, person_id: null, mode: "awaiting_person_name", pending_value: null });
+    return send(token, chatId, "<b>➕ Influencerin hinzufügen</b>\n\nSende jetzt den korrekten Namen. Dieser Name bleibt während des Spiels verborgen.", { reply_markup: { inline_keyboard: [backButton(`guesspeople:${id}`)] } });
+  }
+  if (action === "finishguess") {
+    const { data:g } = await supabase.from("guess_games").select("game_mode,title").eq("id", id).maybeSingle();
+    const { count } = await supabase.from("guess_people").select("id", { count: "exact", head: true }).eq("game_id", id);
+    const minimum = g?.game_mode === "single" ? 1 : 2;
+    if ((count ?? 0) < minimum) return send(token, chatId, `Füge zuerst mindestens ${minimum} Influencerin${minimum > 1 ? "nen" : ""} hinzu.`, { reply_markup: { inline_keyboard: [backButton(`guesspeople:${id}`)] } });
+    await supabase.from("guess_games").update({ is_active: true, updated_at: new Date().toISOString() }).eq("id", id);
+    await setGuessSession(callback.from.id, { game_id: null, person_id: null, mode: "idle", game_mode: null, pending_value: null });
+    return send(token, chatId, `✅ <b>${escapeHtml(g?.title ?? "Rate-Kategorie")}</b> ist fertig.`, { reply_markup: { inline_keyboard: [[{text:"▶️ Spiel starten",callback_data:`playguessid:${id}`}],backButton(`guesscat:${id}`)] } });
+  }
+  if (action === "guessperson") {
+    const { data:p } = await supabase.from("guess_people").select("id,game_id,display_name,aliases,social_handle").eq("id", id).maybeSingle();
+    if (!p) return send(token, chatId, "Influencerin nicht gefunden.");
+    const { count } = await supabase.from("guess_media").select("id", { count:"exact", head:true }).eq("person_id", id);
+    return send(token, chatId, `<b>⚙️ Influencerin verwalten</b>\n\n<b>${escapeHtml(p.display_name)}</b>\nHinweise: <b>${count ?? 0}</b>`, { reply_markup: { inline_keyboard: [
+      [{text:"🖼 Hinweise ansehen",callback_data:`guessmedia:${id}`}],
+      [{text:"➕ Hinweis hinzufügen",callback_data:`addguessmedia:${id}`}],
+      [{text:"🔤 Aliase bearbeiten",callback_data:`guessaliases:${id}`}],
+      [{text:"🗑 Influencerin entfernen",callback_data:`deleteguesspersonask:${id}`}],
+      backButton(`guesspeople:${p.game_id}`)
+    ] } });
+  }
+  if (action === "addguessmedia") {
+    const { data:p } = await supabase.from("guess_people").select("game_id,display_name").eq("id", id).maybeSingle();
+    if (!p) return send(token, chatId, "Influencerin nicht gefunden.");
+    await setGuessSession(callback.from.id, { game_id: p.game_id, person_id: id, mode: "awaiting_hint_media", pending_value: null });
+    return send(token, chatId, `Sende jetzt einen Bildausschnitt oder ein GIF für <b>${escapeHtml(p.display_name)}</b>. Die Reihenfolge bestimmt den Schwierigkeitsgrad.`, { reply_markup: { inline_keyboard: [backButton(`guessperson:${id}`)] } });
+  }
+  if (action === "guessmedia") {
+    const { data:p } = await supabase.from("guess_people").select("game_id,display_name").eq("id", id).maybeSingle();
+    const { data:media } = await supabase.from("guess_media").select("id,media_url,media_type,hint_level,sort_order").eq("person_id", id).order("sort_order");
+    for (const m of media ?? []) {
+      const method = m.media_type === "animation" ? "sendAnimation" : "sendPhoto";
+      const field = m.media_type === "animation" ? "animation" : "photo";
+      await telegramApi(token, method, { chat_id: chatId, [field]: m.media_url, caption: `Hinweis ${m.hint_level}` });
+    }
+    return send(token, chatId, `<b>🖼 Hinweise: ${escapeHtml(p?.display_name ?? "Influencerin")}</b>`, { reply_markup: { inline_keyboard: [[{text:"➕ Hinweis hinzufügen",callback_data:`addguessmedia:${id}`}],backButton(`guessperson:${id}`)] } });
   }
   if (action === "toggleguessimages") {
     const { data:g } = await supabase.from("guess_games").select("send_images").eq("id", id).single();
@@ -1192,6 +1335,48 @@ export async function POST(request: NextRequest) {
     }
     if (command === "/abbrechenbudget") { await setBudgetSession(userId, { game_id: null, mode: "idle", pending_file_id: null }); await send(token, chatId, "Budget-Eingabe abgebrochen."); return NextResponse.json({ ok: true }); }
     if (isPrivate && (role === "owner" || role === "creator")) {
+      const guessSession = await getGuessSession(userId);
+      if (guessSession?.mode === "awaiting_title" && text && !isCommand) {
+        const title = text.trim();
+        const { data: game, error } = await supabase.from("guess_games").insert({ creator_id: userId, title, game_mode: guessSession.game_mode ?? "collection", answer_mode: "free_text", hints_enabled: true, send_images: true, is_active: false }).select("id,title").single();
+        if (error) throw error;
+        await incrementCreatorUsage(userId, role);
+        await setGuessSession(userId, { game_id: game.id, person_id: null, mode: "awaiting_person_name", pending_value: null });
+        await send(token, chatId, `✅ Kategorie <b>${escapeHtml(game.title)}</b> erstellt.\n\nSende jetzt den Namen der ersten Influencerin. Der Spielname bleibt neutral und verrät die Lösung nicht.`, { reply_markup: { inline_keyboard: [backButton(`guesscat:${game.id}`)] } });
+        return NextResponse.json({ ok: true });
+      }
+      if (guessSession?.mode === "awaiting_person_name" && guessSession.game_id && text && !isCommand) {
+        const { count } = await supabase.from("guess_people").select("id", {count:"exact",head:true}).eq("game_id",guessSession.game_id);
+        const { data: person, error } = await supabase.from("guess_people").insert({ game_id: guessSession.game_id, display_name: text.trim(), aliases: [], sort_order: (count ?? 0)+1 }).select("id,display_name").single();
+        if (error) throw error;
+        await setGuessSession(userId, { person_id: person.id, mode: "awaiting_aliases", pending_value: null });
+        await send(token, chatId, `Welche alternativen Namen, Schreibweisen oder Handles sollen für <b>${escapeHtml(person.display_name)}</b> gelten?\n\nMit Komma trennen oder <code>Keine</code> senden.`);
+        return NextResponse.json({ ok: true });
+      }
+      if (guessSession?.mode === "awaiting_aliases" && guessSession.person_id && text && !isCommand) {
+        const aliases = /^keine$/i.test(text.trim()) ? [] : text.split(",").map(v=>v.trim()).filter(Boolean);
+        await supabase.from("guess_people").update({ aliases }).eq("id", guessSession.person_id);
+        await setGuessSession(userId, { mode: "awaiting_hint_media" });
+        await send(token, chatId, "Sende jetzt den ersten Bildausschnitt oder ein GIF. Weitere Medien kannst du anschließend direkt hinzufügen.");
+        return NextResponse.json({ ok: true });
+      }
+      const guessPhoto = message.photo?.at(-1);
+      const guessAnimation = (message as any).animation as {file_id:string}|undefined;
+      if (guessSession?.mode === "awaiting_hint_media" && guessSession.person_id && (guessPhoto || guessAnimation)) {
+        const fileId = guessPhoto?.file_id ?? guessAnimation!.file_id;
+        const uploaded = await uploadTelegramPhoto(token, fileId, userId);
+        const { count } = await supabase.from("guess_media").select("id", {count:"exact",head:true}).eq("person_id",guessSession.person_id);
+        await supabase.from("guess_media").insert({ person_id: guessSession.person_id, media_url: uploaded.imageUrl, media_type: guessAnimation ? "animation" : "image", hint_level:(count??0)+1, sort_order:(count??0)+1 });
+        const { data:p } = await supabase.from("guess_people").select("game_id,display_name").eq("id",guessSession.person_id).single();
+        if (!p) throw new Error("Influencerin nicht gefunden.");
+        await send(token, chatId, `✅ Hinweis ${(count??0)+1} für <b>${escapeHtml(p.display_name)}</b> gespeichert.`, { reply_markup: { inline_keyboard: [
+          [{text:"➕ Weiteren Hinweis hinzufügen",callback_data:`addguessmedia:${guessSession.person_id}`}],
+          [{text:"➕ Weitere Influencerin",callback_data:`addguessperson:${p.game_id}`}],
+          [{text:"✅ Kategorie abschließen",callback_data:`finishguess:${p.game_id}`}],
+          backButton(`guesspeople:${p.game_id}`)
+        ] } });
+        return NextResponse.json({ ok: true });
+      }
       const budgetSession = await getBudgetSession(userId);
       if (budgetSession?.mode === "awaiting_budget_title" && text && !isCommand) {
         await setBudgetSession(userId, { game_id: null, mode: "awaiting_budget_amount", pending_file_id: text.trim() });

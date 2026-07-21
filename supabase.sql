@@ -226,3 +226,27 @@ create table if not exists guess_answers (
 create index if not exists guess_people_game_idx on guess_people(game_id);
 create index if not exists guess_media_person_idx on guess_media(person_id);
 create index if not exists guess_answers_game_idx on guess_answers(game_id, chat_id);
+
+-- Version 4.3: einheitliche Kategorienverwaltung und Rate-Assistent
+alter table if exists guess_games add column if not exists game_mode text not null default 'collection' check (game_mode in ('single','collection'));
+alter table if exists guess_games add column if not exists show_own_choice boolean not null default true;
+alter table if exists guess_games add column if not exists show_community_result boolean not null default true;
+alter table if exists guess_games add column if not exists auto_send_results boolean not null default true;
+alter table if exists categories add column if not exists show_own_choice boolean not null default true;
+alter table if exists categories add column if not exists show_community_result boolean not null default true;
+alter table if exists categories add column if not exists auto_send_results boolean not null default true;
+alter table if exists budget_games add column if not exists show_own_choice boolean not null default true;
+alter table if exists budget_games add column if not exists show_community_result boolean not null default true;
+alter table if exists budget_games add column if not exists auto_send_results boolean not null default true;
+alter table if exists items add column if not exists media_type text not null default 'image' check (media_type in ('image','animation'));
+alter table if exists budget_items add column if not exists media_type text not null default 'image' check (media_type in ('image','animation'));
+create table if not exists guess_admin_sessions (
+  user_id bigint primary key,
+  game_id uuid references guess_games(id) on delete cascade,
+  person_id uuid references guess_people(id) on delete cascade,
+  mode text not null default 'idle',
+  game_mode text check (game_mode is null or game_mode in ('single','collection')),
+  pending_value text,
+  updated_at timestamptz not null default now()
+);
+alter table guess_admin_sessions enable row level security;
