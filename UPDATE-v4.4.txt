@@ -1,0 +1,15 @@
+Version 4.4 – Spiele sicher in Gruppen starten
+
+Neu:
+- Alle vier Spiele können direkt nach der Erstellung in einer Gruppe gestartet werden.
+- Unter Meine Spiele → Kategorie verwalten gibt es bei allen vier Spielen „📣 In Gruppe starten“.
+- Angezeigt werden nur bekannte Gruppen, in denen der Nutzer und der Bot aktuell Administrator oder Eigentümer sind.
+- Vor dem tatsächlichen Start werden die Rechte live über Telegram erneut geprüft.
+- Fehlende Gruppen können über „Bot zu einer Gruppe hinzufügen“ verbunden werden.
+- Ratespiele unterstützen jetzt ebenfalls sichere Telegram-Deep-Links aus Gruppen.
+
+Supabase:
+Den Abschnitt „Version 4.4: sichere Gruppen-Auswahl für alle Spiele“ aus supabase.sql ausführen.
+
+Wichtig:
+Eine Gruppe wird registriert, sobald der Bot dort ein Update bzw. eine Nachricht erhält. Nach dem Hinzufügen den Bot zum Administrator machen und einmal eine Nachricht oder einen Bot-Befehl in der Gruppe senden. Danach erscheint die Gruppe in der privaten Auswahl.

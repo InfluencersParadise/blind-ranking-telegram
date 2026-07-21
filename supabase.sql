@@ -256,3 +256,15 @@ alter table if exists guess_games drop constraint if exists guess_games_answer_m
 alter table if exists guess_games
   add constraint guess_games_answer_mode_check
   check (answer_mode in ('free_text', 'multiple_choice', 'mixed'));
+
+-- Version 4.4: sichere Gruppen-Auswahl für alle Spiele
+create table if not exists bot_groups (
+  chat_id bigint primary key,
+  title text not null,
+  chat_type text not null default 'supergroup' check (chat_type in ('group','supergroup')),
+  active boolean not null default true,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table bot_groups enable row level security;
