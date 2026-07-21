@@ -686,7 +686,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   if (action === "budgetresults") {
     const { data:g } = await supabase.from("budget_games").select("title,send_images").eq("id", id).maybeSingle();
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
-    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [
+    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>\n\nSollen Bilder oder GIFs im Ergebnis gesendet werden?`, { reply_markup: { inline_keyboard: [
       [{ text: `🖼 Bilder mitsenden: ${g.send_images !== false ? "✅ Ja" : "❌ Nein"}`, callback_data: `togglebudgetimages:${id}` }],
       backButton(`budgetcat:${id}`)
     ] } });
@@ -711,12 +711,29 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   if (action === "guessresults") {
     const { data:g } = await supabase.from("guess_games").select("title,send_images").eq("id", id).maybeSingle();
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
-    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [[{ text: `🖼 Bilder mitsenden: ${g.send_images ? "✅ Ja" : "❌ Nein"}`, callback_data: `toggleguessimages:${id}` }], backButton(`guesscat:${id}`)] } });
+    return send(token, chatId, `<b>⚙️ Ergebnis-Einstellungen</b>\n\nKategorie: <b>${escapeHtml(g.title)}</b>\n\nSollen Bilder oder GIFs im Ergebnis gesendet werden?`, { reply_markup: { inline_keyboard: [[{ text: `🖼 Bilder/GIFs senden: ${g.send_images ? "✅ Ja" : "❌ Nein"}`, callback_data: `toggleguessimages:${id}` }], backButton(`guesscat:${id}`)] } });
   }
   if (action === "guesssettings") {
     const { data:g } = await supabase.from("guess_games").select("title,answer_mode,hints_enabled,game_mode").eq("id", id).maybeSingle();
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
-    return send(token, chatId, `<b>🎮 Spieleinstellungen</b>\n\nModus: <b>${g.game_mode === "single" ? "Einzel" : "Sammlung"}</b>\nAntwort: <b>${g.answer_mode}</b>\nHinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
+    const answerLabel = g.answer_mode === "multiple_choice" ? "Namen auswählen" : g.answer_mode === "mixed" ? "Gemischter Modus" : "Namen eingeben";
+    return send(token, chatId, `<b>🎮 Rate-Einstellungen</b>
+
+Kategorie: <b>${escapeHtml(g.title)}</b>
+Modus: <b>${g.game_mode === "single" ? "Einzelne Influencerin" : "Mehrere Influencerinnen"}</b>
+Antwortmodus: <b>${answerLabel}</b>
+Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_keyboard: [
+      [{ text: `${g.answer_mode === "free_text" ? "✅ " : ""}⌨️ Namen eingeben`, callback_data: `guessanswerfree:${id}` }],
+      [{ text: `${g.answer_mode === "multiple_choice" ? "✅ " : ""}🔘 Namen auswählen`, callback_data: `guessanswerchoice:${id}` }],
+      [{ text: `${g.answer_mode === "mixed" ? "✅ " : ""}🎲 Gemischter Modus`, callback_data: `guessanswermixed:${id}` }],
+      backButton(`guesscat:${id}`)
+    ] } });
+  }
+  if (["guessanswerfree", "guessanswerchoice", "guessanswermixed"].includes(action)) {
+    const mode = action === "guessanswerchoice" ? "multiple_choice" : action === "guessanswermixed" ? "mixed" : "free_text";
+    await supabase.from("guess_games").update({ answer_mode: mode, updated_at: new Date().toISOString() }).eq("id", id);
+    const label = mode === "multiple_choice" ? "Namen auswählen" : mode === "mixed" ? "Gemischter Modus" : "Namen eingeben";
+    return send(token, chatId, `✅ Antwortmodus geändert: <b>${label}</b>`, { reply_markup: { inline_keyboard: [[{ text: "⬅️ Zu den Rate-Einstellungen", callback_data: `guesssettings:${id}` }]] } });
   }
   if (action === "guessstats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nTrefferquote, Punkte und verwendete Hinweise werden pro Kategorie ausgewertet.", { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
   if (action === "guesspeople") {

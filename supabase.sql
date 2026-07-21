@@ -250,3 +250,9 @@ create table if not exists guess_admin_sessions (
   updated_at timestamptz not null default now()
 );
 alter table guess_admin_sessions enable row level security;
+
+-- Version 4.3.2: Rate-Antwortmodus und mobile Mini-App
+alter table if exists guess_games drop constraint if exists guess_games_answer_mode_check;
+alter table if exists guess_games
+  add constraint guess_games_answer_mode_check
+  check (answer_mode in ('free_text', 'multiple_choice', 'mixed'));
