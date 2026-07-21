@@ -717,7 +717,8 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
   const [action, id] = callback.data.split(":", 2);
   const supabase = getSupabaseAdmin();
   await answerCallback(token, callback.id);
-  if (callback.message.chat?.type === "private") {
+  const deferPrivateMenuDelete = callback.message.chat?.type === "private" && (action === "grp" || action === "syncgrp");
+  if (callback.message.chat?.type === "private" && !deferPrivateMenuDelete) {
     try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
   }
 
@@ -736,41 +737,43 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
     if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
-    const count = await syncKnownGroups(token);
-    await send(token, chatId, `✅ ${count} bekannte Gruppe${count === 1 ? "" : "n"} wurden geprüft.`);
-    const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
-    return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
+    const statusMessage = await send(token, chatId, "🔍 <b>Gruppen und Berechtigungen werden geprüft …</b>\n\nBitte einen Moment warten.");
+    try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
+    try {
+      await syncKnownGroups(token);
+      const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
+      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
+      return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
+    } catch (error) {
+      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
+      return send(token, chatId, error instanceof Error ? `❌ ${escapeHtml(error.message)}` : "❌ Gruppen konnten nicht geprüft werden.");
+    }
   }
   if (action === "grp") {
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
     if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    const statusMessage = await send(token, chatId, "🔍 <b>Gruppen und Berechtigungen werden geprüft …</b>\n\nBitte einen Moment warten.");
+    try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
     const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
-    return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
+    try {
+      await syncKnownGroups(token);
+      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
+      return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
+    } catch (error) {
+      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
+      return send(token, chatId, error instanceof Error ? `❌ ${escapeHtml(error.message)}` : "❌ Gruppen konnten nicht geprüft werden.");
+    }
   }
   if (action === "sg") {
     const [kindRaw, gameId, groupIdRaw] = id.split("|");
     const kind = kindRaw as ShareGameKind;
     const groupId = Number(groupIdRaw);
     if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
-    const statusMessage = await send(token, chatId, "🔍 <b>Gruppe und Berechtigungen werden geprüft …</b>\n\nBitte einen Moment warten.");
-    const removeStatus = async () => {
-      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
-    };
-    if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) {
-      await removeStatus();
-      return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
-    }
+    if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
     const check = await telegramAdminCheck(token, groupId, callback.from.id);
-    if (!check.userAllowed) {
-      await removeStatus();
-      return send(token, chatId, "Du bist in dieser Gruppe nicht mehr Administrator oder Eigentümer.");
-    }
-    if (!check.botAllowed) {
-      await removeStatus();
-      return send(token, chatId, "Der Bot muss in dieser Gruppe Administrator sein.");
-    }
-    await removeStatus();
+    if (!check.userAllowed) return send(token, chatId, "Du bist in dieser Gruppe nicht mehr Administrator oder Eigentümer.");
+    if (!check.botAllowed) return send(token, chatId, "Der Bot muss in dieser Gruppe Administrator sein.");
     const title = await getShareGameTitle(kind, gameId);
     const { data: group } = await supabase.from("bot_groups").select("title").eq("chat_id", groupId).maybeSingle();
     return send(token, chatId, `<b>Spiel wirklich starten?</b>\n\nSpiel: <b>${escapeHtml(title ?? shareKindLabel(kind))}</b>\nGruppe: <b>${escapeHtml(group?.title ?? String(groupId))}</b>`, { reply_markup: { inline_keyboard: [[{ text: "✅ Jetzt starten", callback_data: `cg:${kind}|${gameId}|${groupId}` }], [{ text: "⬅️ Andere Gruppe wählen", callback_data: `grp:${kind}|${gameId}` }]] } });
@@ -780,26 +783,10 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
     const kind = kindRaw as ShareGameKind;
     const groupId = Number(groupIdRaw);
     if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
-    const statusMessage = await send(token, chatId, "🔍 <b>Letzte Prüfung läuft …</b>\n\nGruppe, Administratorrechte und Spielstatus werden geprüft. Bitte einen Moment warten.");
-    const removeStatus = async () => {
-      try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
-    };
-    if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) {
-      await removeStatus();
-      return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
-    }
+    if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
     const check = await telegramAdminCheck(token, groupId, callback.from.id);
-    if (!check.userAllowed || !check.botAllowed) {
-      await removeStatus();
-      return send(token, chatId, "Start nicht erlaubt. Du und der Bot müssen in der Gruppe Administrator sein.");
-    }
-    try {
-      await sendGameToGroup(token, kind, gameId, groupId);
-    } catch (error) {
-      await removeStatus();
-      throw error;
-    }
-    await removeStatus();
+    if (!check.userAllowed || !check.botAllowed) return send(token, chatId, "Start nicht erlaubt. Du und der Bot müssen in der Gruppe Administrator sein.");
+    await sendGameToGroup(token, kind, gameId, groupId);
     return send(token, chatId, "✅ Das Spiel wurde in der Gruppe gestartet.", { reply_markup: { inline_keyboard: [[{ text: "📣 In weiterer Gruppe starten", callback_data: `grp:${kind}|${gameId}` }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`)] } });
   }
   if (action === "tokenredeem") {

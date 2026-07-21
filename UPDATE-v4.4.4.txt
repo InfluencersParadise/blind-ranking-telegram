@@ -1,0 +1,7 @@
+Version 4.4.4
+
+- Beim Klick auf „In Gruppe starten“ wird zuerst sofort eine Statusnachricht gesendet.
+- Erst danach wird die vorherige Menü-Nachricht gelöscht.
+- Anschließend beginnt die eigentliche Gruppen- und Rechteprüfung.
+- Nach Abschluss wird die Statusnachricht gelöscht und die Gruppenliste oder eine Fehlermeldung angezeigt.
+- Gilt für alle vier Spiele.
