@@ -470,13 +470,11 @@ async function sendCommands(token: string, chatId: string | number, role: BotRol
     ? [
         [{ text: "➕ Neues Spiel erstellen", callback_data: "createmenu:x" }],
         [{ text: "🎮 Meine Spiele", callback_data: "gamesmenu:x" }],
-        [{ text: "📣 In Gruppe starten", callback_data: "playmenu:x" }],
         [{ text: "📊 Statistiken", callback_data: "statsmenu:x" }],
         [{ text: "⚙️ Konto & Einstellungen", callback_data: "accountmenu:x" }],
         ...(role === "owner" ? [[{ text: "🔐 Rollen & Tokens", callback_data: "rolemenu:x" }]] : [])
       ]
     : [
-        [{ text: "📣 In Gruppe starten", callback_data: "playmenu:x" }],
         [{ text: "📊 Statistiken", callback_data: "statsmenu:x" }],
         [{ text: "🎟 Creator-Token einlösen", callback_data: "tokenredeem:x" }]
       ];

@@ -1,0 +1,5 @@
+Version 4.4.5
+
+- Die Kachel „📣 In Gruppe starten“ wurde ausschließlich aus dem Game Hub entfernt.
+- Der Gruppenstart innerhalb der einzelnen Kategorien bleibt vollständig erhalten.
+- TypeScript-Prüfung erfolgreich.
