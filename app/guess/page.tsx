@@ -7,6 +7,8 @@ export default function GuessPage() {
   const [i, setI] = useState(0);
   const [answer, setAnswer] = useState("");
   const [result, setResult] = useState<any>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [hint, setHint] = useState(0);
   const resultRef = useRef<HTMLDivElement | null>(null);
   const params = useMemo(
@@ -36,8 +38,13 @@ export default function GuessPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initData: tg?.initData ?? "", gameId }),
     })
-      .then((response) => response.json())
-      .then(setData);
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Spiel konnte nicht geladen werden.");
+        return payload;
+      })
+      .then(setData)
+      .catch((error) => setLoadError(error instanceof Error ? error.message : "Spiel konnte nicht geladen werden."));
 
     return () => {
       tg?.offEvent?.("viewportChanged", syncViewport);
@@ -54,8 +61,9 @@ export default function GuessPage() {
     }, 120);
   }, [result]);
 
-  if (!data) return <main className="app-shell guess-shell"><p>Lädt…</p></main>;
-  if (data.error) return <main className="app-shell guess-shell"><p>{data.error}</p></main>;
+  if (loadError) return <main className="app-shell guess-shell"><section className="guess-card"><h1>Fehler</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>Erneut versuchen</button></section></main>;
+  if (!data) return <main className="app-shell guess-shell"><section className="guess-card"><p>Spiel wird geladen …</p></section></main>;
+  if (data.error) return <main className="app-shell guess-shell"><section className="guess-card"><h1>Fehler</h1><p>{data.error}</p></section></main>;
 
   const round = data.rounds[i];
   if (!round) return <main className="app-shell guess-shell"><h1>Geschafft 🎉</h1></main>;
@@ -64,7 +72,9 @@ export default function GuessPage() {
   const answerMode = round.answerMode ?? data.game.answer_mode;
 
   async function check(value = answer) {
-    if (!value.trim()) return;
+    const cleaned = value.replace(/\s+/g, " ").trim();
+    if (!cleaned || submitting) return;
+    setSubmitting(true);
     const tg = window.Telegram?.WebApp as any;
     const response = await fetch("/api/guess/answer", {
       method: "POST",
@@ -73,11 +83,18 @@ export default function GuessPage() {
         initData: tg?.initData ?? "",
         gameId,
         personId: round.personId,
-        answer: value,
+        answer: cleaned,
         chatId,
       }),
     });
-    setResult(await response.json());
+    const payload = await response.json();
+    setSubmitting(false);
+    if (!response.ok) {
+      setResult({ error: payload.error || "Antwort konnte nicht geprüft werden." });
+      return;
+    }
+    setAnswer(cleaned);
+    setResult(payload);
   }
 
   function nextRound() {
@@ -106,7 +123,7 @@ export default function GuessPage() {
         <div className="guess-controls">
           {answerMode === "multiple_choice" ? (
             round.choices.map((choice: string) => (
-              <button key={choice} type="button" disabled={Boolean(result)} onClick={() => check(choice)}>
+              <button key={choice} type="button" disabled={Boolean(result) || submitting} onClick={() => check(choice)}>
                 {choice}
               </button>
             ))
@@ -118,14 +135,17 @@ export default function GuessPage() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") check();
                 }}
-                disabled={Boolean(result)}
-                placeholder="Name eingeben"
-                autoComplete="off"
-                autoCorrect="off"
+                disabled={Boolean(result) || submitting}
+                placeholder="Vor- und Nachname oder @Handle"
+                autoComplete="name"
+                autoCorrect="on"
+                autoCapitalize="words"
+                enterKeyHint="done"
                 spellCheck={false}
               />
-              <button type="button" disabled={Boolean(result) || !answer.trim()} onClick={() => check()}>
-                Antwort prüfen
+              <p className="guess-helper">Tippfehler und bekannte alternative Schreibweisen werden berücksichtigt.</p>
+              <button type="button" disabled={Boolean(result) || submitting || !answer.trim()} onClick={() => check()}>
+                {submitting ? "Wird geprüft …" : "Antwort prüfen"}
               </button>
             </>
           )}
@@ -139,7 +159,8 @@ export default function GuessPage() {
 
         {result && (
           <div className="result-box" ref={resultRef} aria-live="polite">
-            <strong>{result.correct ? "✅ Richtig" : "❌ Noch nicht richtig"}</strong>
+            <strong>{result.error ? "❌ Fehler" : result.correct ? "✅ Richtig" : "❌ Noch nicht richtig"}</strong>
+            {result.error && <p>{result.error}</p>}
             {result.suggestion && <p>Meintest du „{result.suggestion}“?</p>}
             <p>Lösung: {result.correctName}</p>
             <p>Punkte: {result.points ?? 0}</p>

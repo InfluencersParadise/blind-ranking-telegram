@@ -921,6 +921,42 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
     const rows=(items??[]).map((item:any)=>[{text:`${item.sort_order}. ${item.name} · ${item.price}`,callback_data:`budgetitem:${item.id}`}]);
     return send(token, chatId, "<b>🖼 Medien verwalten</b>", { reply_markup: { inline_keyboard: [[{text:"➕ Bild oder GIF hinzufügen",callback_data:`addbudget:${id}`}],...rows,backButton(`budgetcat:${id}`)] } });
   }
+  if (action === "budgetitem") {
+    const { data:item } = await supabase.from("budget_items").select("id,game_id,name,price,image_url").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    return send(token, chatId, `<b>${escapeHtml(item.name)}</b>\nPreis: <b>${item.price}</b>`, { reply_markup: { inline_keyboard: [[{text:"🗑 Eintrag entfernen",callback_data:`deletebudgetitem:${item.id}`}],backButton(`budgetitems:${item.game_id}`)] } });
+  }
+  if (action === "deletebudgetitem") {
+    const { data:item } = await supabase.from("budget_items").select("game_id").eq("id", id).maybeSingle();
+    if (!item) return send(token, chatId, "Eintrag nicht gefunden.");
+    await supabase.from("budget_items").delete().eq("id", id);
+    return send(token, chatId, "✅ Eintrag entfernt.", { reply_markup: { inline_keyboard: [backButton(`budgetitems:${item.game_id}`)] } });
+  }
+  if (action === "renamebudget") {
+    await setBudgetSession(callback.from.id, { game_id: id, mode: "awaiting_budget_rename", pending_file_id: null });
+    return send(token, chatId, "Sende jetzt den neuen Kategorienamen.", { reply_markup: { inline_keyboard: [backButton(`budgetcat:${id}`)] } });
+  }
+  if (action === "deletebudgetask") return send(token, chatId, "Budget-Kategorie wirklich löschen?", { reply_markup: { inline_keyboard: [[{text:"🗑 Ja, löschen",callback_data:`deletebudget:${id}`}],backButton(`budgetcat:${id}`)] } });
+  if (action === "deletebudget") { await supabase.from("budget_games").delete().eq("id", id); return send(token, chatId, "✅ Budget-Kategorie gelöscht.", { reply_markup: { inline_keyboard: [backButton("catsbudget:x")] } }); }
+  if (action === "renameguess") {
+    await setGuessSession(callback.from.id, { game_id: id, person_id: null, mode: "awaiting_game_rename" });
+    return send(token, chatId, "Sende jetzt den neuen neutralen Kategorienamen.", { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
+  }
+  if (action === "guessaliases") {
+    const { data:person } = await supabase.from("guess_people").select("game_id,display_name,aliases").eq("id", id).maybeSingle();
+    if (!person) return send(token, chatId, "Influencerin nicht gefunden.");
+    await setGuessSession(callback.from.id, { game_id: person.game_id, person_id: id, mode: "awaiting_alias_edit" });
+    return send(token, chatId, `Sende alle akzeptierten Alternativnamen für <b>${escapeHtml(person.display_name)}</b> mit Komma getrennt.\n\nAktuell: ${escapeHtml((person.aliases ?? []).join(", ") || "Keine")}`, { reply_markup: { inline_keyboard: [backButton(`guessperson:${id}`)] } });
+  }
+  if (action === "deleteguesspersonask") return send(token, chatId, "Influencerin und alle Hinweise wirklich entfernen?", { reply_markup: { inline_keyboard: [[{text:"🗑 Ja, entfernen",callback_data:`deleteguessperson:${id}`}],backButton(`guessperson:${id}`)] } });
+  if (action === "deleteguessperson") {
+    const { data:person } = await supabase.from("guess_people").select("game_id").eq("id", id).maybeSingle();
+    if (!person) return send(token, chatId, "Influencerin nicht gefunden.");
+    await supabase.from("guess_people").delete().eq("id", id);
+    return send(token, chatId, "✅ Influencerin entfernt.", { reply_markup: { inline_keyboard: [backButton(`guesspeople:${person.game_id}`)] } });
+  }
+  if (action === "deleteguessask") return send(token, chatId, "Rate-Kategorie wirklich löschen?", { reply_markup: { inline_keyboard: [[{text:"🗑 Ja, löschen",callback_data:`deleteguess:${id}`}],backButton(`guesscat:${id}`)] } });
+  if (action === "deleteguess") { await supabase.from("guess_games").delete().eq("id", id); return send(token, chatId, "✅ Rate-Kategorie gelöscht.", { reply_markup: { inline_keyboard: [backButton("catsguess:x")] } }); }
   if (action === "guessresults") {
     const { data:g } = await supabase.from("guess_games").select("title,send_images").eq("id", id).maybeSingle();
     if (!g) return send(token, chatId, "Kategorie nicht gefunden.");
@@ -944,9 +980,10 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
   }
   if (["guessanswerfree", "guessanswerchoice", "guessanswermixed"].includes(action)) {
     const mode = action === "guessanswerchoice" ? "multiple_choice" : action === "guessanswermixed" ? "mixed" : "free_text";
-    await supabase.from("guess_games").update({ answer_mode: mode, updated_at: new Date().toISOString() }).eq("id", id);
+    const { error } = await supabase.from("guess_games").update({ answer_mode: mode, updated_at: new Date().toISOString() }).eq("id", id);
+    if (error) return send(token, chatId, `❌ Antwortmodus konnte nicht gespeichert werden: ${escapeHtml(error.message)}`, { reply_markup: { inline_keyboard: [backButton(`guesssettings:${id}`)] } });
     const label = mode === "multiple_choice" ? "Namen auswählen" : mode === "mixed" ? "Gemischter Modus" : "Namen eingeben";
-    return send(token, chatId, `✅ Antwortmodus geändert: <b>${label}</b>`, { reply_markup: { inline_keyboard: [[{ text: "⬅️ Zu den Rate-Einstellungen", callback_data: `guesssettings:${id}` }]] } });
+    return send(token, chatId, `✅ Antwortmodus gespeichert: <b>${label}</b>`, { reply_markup: { inline_keyboard: [[{ text: "🎮 Einstellungen erneut öffnen", callback_data: `guesssettings:${id}` }], backButton(`guesscat:${id}`)] } });
   }
   if (action === "guessstats") return send(token, chatId, "<b>📊 Ergebnisse & Statistiken</b>\n\nTrefferquote, Punkte und verwendete Hinweise werden pro Kategorie ausgewertet.", { reply_markup: { inline_keyboard: [backButton(`guesscat:${id}`)] } });
   if (action === "guesspeople") {
@@ -1585,6 +1622,21 @@ export async function POST(request: NextRequest) {
         await send(token, chatId, `✅ Kategorie <b>${escapeHtml(game.title)}</b> erstellt.\n\nSende jetzt den Namen der ersten Influencerin. Der Spielname bleibt neutral und verrät die Lösung nicht.`, { reply_markup: { inline_keyboard: [backButton(`guesscat:${game.id}`)] } });
         return NextResponse.json({ ok: true });
       }
+      if (guessSession?.mode === "awaiting_game_rename" && guessSession.game_id && text && !isCommand) {
+        const title = text.trim();
+        if (title.length < 2) { await send(token, chatId, "Der Kategoriename ist zu kurz."); return NextResponse.json({ ok: true }); }
+        await supabase.from("guess_games").update({ title, updated_at: new Date().toISOString() }).eq("id", guessSession.game_id);
+        await setGuessSession(userId, { mode: "idle" });
+        await send(token, chatId, `✅ Kategorie umbenannt in <b>${escapeHtml(title)}</b>.`, { reply_markup: { inline_keyboard: [backButton(`guesscat:${guessSession.game_id}`)] } });
+        return NextResponse.json({ ok: true });
+      }
+      if (guessSession?.mode === "awaiting_alias_edit" && guessSession.person_id && text && !isCommand) {
+        const aliases = /^keine$/i.test(text.trim()) ? [] : Array.from(new Set(text.split(",").map(v => v.trim()).filter(Boolean)));
+        await supabase.from("guess_people").update({ aliases }).eq("id", guessSession.person_id);
+        await setGuessSession(userId, { mode: "idle" });
+        await send(token, chatId, "✅ Alternative Namen wurden gespeichert.", { reply_markup: { inline_keyboard: [backButton(`guessperson:${guessSession.person_id}`)] } });
+        return NextResponse.json({ ok: true });
+      }
       if (guessSession?.mode === "awaiting_person_name" && guessSession.game_id && text && !isCommand) {
         const { count } = await supabase.from("guess_people").select("id", {count:"exact",head:true}).eq("game_id",guessSession.game_id);
         const { data: person, error } = await supabase.from("guess_people").insert({ game_id: guessSession.game_id, display_name: text.trim(), aliases: [], sort_order: (count ?? 0)+1 }).select("id,display_name").single();
@@ -1620,6 +1672,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
       const budgetSession = await getBudgetSession(userId);
+      if (budgetSession?.mode === "awaiting_budget_rename" && budgetSession.game_id && text && !isCommand) {
+        const title = text.trim();
+        if (title.length < 2) { await send(token, chatId, "Der Kategoriename ist zu kurz."); return NextResponse.json({ ok: true }); }
+        await supabase.from("budget_games").update({ title, updated_at: new Date().toISOString() }).eq("id", budgetSession.game_id);
+        await setBudgetSession(userId, { mode: "idle" });
+        await send(token, chatId, `✅ Kategorie umbenannt in <b>${escapeHtml(title)}</b>.`, { reply_markup: { inline_keyboard: [backButton(`budgetcat:${budgetSession.game_id}`)] } });
+        return NextResponse.json({ ok: true });
+      }
       if (budgetSession?.mode === "awaiting_budget_title" && text && !isCommand) {
         await setBudgetSession(userId, { game_id: null, mode: "awaiting_budget_amount", pending_file_id: text.trim() });
         await send(token, chatId, `<b>Budget für ${escapeHtml(text.trim())}</b>\n\nWähle einen Betrag:`, { reply_markup: { inline_keyboard: [
