@@ -1206,13 +1206,16 @@ Abgegebene Rankings: <b>${count??0}</b>`,{reply_markup:{inline_keyboard:[backBut
     ]}});
   }
   if (action === "positionsettings") {
-    const {data:g}=await supabase.from("position_games").select("ranking_mode,question").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    const {data:g}=await supabase.from("position_games").select("ranking_mode,question,position_labels").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    const labels=Array.isArray(g.position_labels)?g.position_labels:[];
     return send(token,chatId,`<b>🎮 Spieleinstellungen</b>
 
 Modus: <b>${g.ranking_mode==="blind"?"Blind Ranking":"Alle sichtbar"}</b>
-Frage: ${escapeHtml(g.question)}`,{reply_markup:{inline_keyboard:[
+Frage: ${escapeHtml(g.question)}
+Positionen: <b>${labels.length?labels.map((label:string)=>escapeHtml(label)).join(" · "):"noch nicht festgelegt"}</b>`,{reply_markup:{inline_keyboard:[
       [{text:g.ranking_mode==="blind"?"👁 Auf alle sichtbar wechseln":"🎲 Auf Blind Ranking wechseln",callback_data:`togglepositionmode:${id}`}],
       [{text:"❓ Frage bearbeiten",callback_data:`editpositionquestion:${id}`}],
+      [{text:"🏷 Positionen benennen",callback_data:`editpositionlabels:${id}`}],
       backButton(`positioncat:${id}`)
     ]}});
   }
@@ -1225,6 +1228,17 @@ Frage: ${escapeHtml(g.question)}`,{reply_markup:{inline_keyboard:[
     await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_question_edit"});
     return send(token,chatId,"Sende jetzt die neue Frage oder Aufgabenstellung.",{reply_markup:{inline_keyboard:[backButton(`positionsettings:${id}`)]}});
   }
+  if (action === "editpositionlabels") {
+    const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",id);
+    if((count??0)<2)return send(token,chatId,"Füge zuerst mindestens zwei Influencerinnen hinzu.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${id}`)]}});
+    await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_labels_edit"});
+    return send(token,chatId,`Sende genau <b>${count}</b> Bezeichnungen – je eine pro Zeile oder mit Komma getrennt.
+
+Beispiel:
+<code>Unbedingt
+Sehr gerne
+Vielleicht</code>`,{reply_markup:{inline_keyboard:[[{text:"🔢 Standardplätze verwenden",callback_data:`positionlabelsdefault:${id}`}],backButton(`positionsettings:${id}`)]}});
+  }
   if (action === "addposition") {
     await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_item_media"});
     return send(token,chatId,"Sende ein Bild oder GIF mit dem Namen der Influencerin als Bildunterschrift.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${id}`)]}});
@@ -1232,10 +1246,21 @@ Frage: ${escapeHtml(g.question)}`,{reply_markup:{inline_keyboard:[
   if (action === "finishposition") {
     const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",id);
     if((count??0)<2)return send(token,chatId,"Füge mindestens zwei Influencerinnen hinzu.");
+    await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_labels"});
+    return send(token,chatId,`Benenne jetzt genau <b>${count}</b> Positionen. Sende je eine Bezeichnung pro Zeile oder trenne sie mit Kommas.
+
+Beispiel:
+<code>Unbedingt
+Sehr gerne
+Vielleicht</code>`,{reply_markup:{inline_keyboard:[[{text:"🔢 Standardplätze verwenden",callback_data:`positionlabelsdefault:${id}`}],backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "positionlabelsdefault") {
+    const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",id);
+    if((count??0)<2)return send(token,chatId,"Füge zuerst mindestens zwei Influencerinnen hinzu.");
     const labels=Array.from({length:count??0},(_,i)=>`${i+1}. Platz`);
     await supabase.from("position_games").update({is_active:true,position_labels:labels,updated_at:new Date().toISOString()}).eq("id",id);
-    await setPositionSession(callback.from.id,{game_id:null,mode:"idle"});
-    return send(token,chatId,"✅ Position Ranking ist fertig.",{reply_markup:{inline_keyboard:[[{text:"▶️ Privat starten",callback_data:`privateplay:p|${id}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:p|${id}`}],backButton(`positioncat:${id}`)]}});
+    await setPositionSession(callback.from.id,{game_id:null,mode:"idle",ranking_mode:null,pending_value:null});
+    return send(token,chatId,"✅ Standardplätze wurden gespeichert.",{reply_markup:{inline_keyboard:[[{text:"▶️ Privat starten",callback_data:`privateplay:p|${id}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:p|${id}`}],backButton(`positioncat:${id}`)]}});
   }
   if (action === "togglepositionimages") {
     const {data:g}=await supabase.from("position_games").select("send_images").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
@@ -1911,6 +1936,27 @@ Sende jetzt die Frage oder Aufgabenstellung, die Spieler sehen sollen.`,{reply_m
         await supabase.from("position_games").update({question:text.trim(),updated_at:new Date().toISOString()}).eq("id",positionSession.game_id);
         await setPositionSession(userId,{mode:"idle"});
         await send(token,chatId,"✅ Frage gespeichert.",{reply_markup:{inline_keyboard:[backButton(`positionsettings:${positionSession.game_id}`)]}});
+        return NextResponse.json({ok:true});
+      }
+      if ((positionSession?.mode === "awaiting_labels" || positionSession?.mode === "awaiting_labels_edit") && positionSession.game_id && text && !isCommand) {
+        const rawLabels=text.split(/[\n,;]+/).map((value:string)=>value.trim()).filter(Boolean);
+        const labels=[...new Set(rawLabels)];
+        const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",positionSession.game_id);
+        if(labels.length!==(count??0)){
+          await send(token,chatId,`Bitte sende genau <b>${count??0}</b> unterschiedliche Bezeichnungen. Aktuell erkannt: <b>${labels.length}</b>.
+
+Je eine Position pro Zeile oder mit Komma getrennt.`);
+          return NextResponse.json({ok:true});
+        }
+        if(labels.some((label:string)=>label.length>40)){
+          await send(token,chatId,"Eine Positionsbezeichnung darf höchstens 40 Zeichen lang sein.");
+          return NextResponse.json({ok:true});
+        }
+        await supabase.from("position_games").update({position_labels:labels,is_active:true,updated_at:new Date().toISOString()}).eq("id",positionSession.game_id);
+        const edited=positionSession.mode==="awaiting_labels_edit";
+        const gameId=positionSession.game_id;
+        await setPositionSession(userId,{game_id:null,mode:"idle",ranking_mode:null,pending_value:null});
+        await send(token,chatId,edited?"✅ Positionsbezeichnungen wurden aktualisiert.":"✅ Position Ranking ist fertig.",{reply_markup:{inline_keyboard:edited?[backButton(`positionsettings:${gameId}`)]:[[{text:"▶️ Privat starten",callback_data:`privateplay:p|${gameId}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:p|${gameId}`}],backButton(`positioncat:${gameId}`)]}});
         return NextResponse.json({ok:true});
       }
       if (positionSession?.mode === "awaiting_question" && positionSession.game_id && text && !isCommand) {

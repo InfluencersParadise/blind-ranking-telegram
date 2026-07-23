@@ -11,7 +11,7 @@ export async function POST(req:NextRequest){
   const body=await req.json() as {initData?:string;gameId:string;chatId?:string;ranking:{itemId:string;rank:number}[]};
   const auth=validateTelegramInitData(body.initData??"",token);if(!auth.ok)return NextResponse.json({error:telegramAuthErrorMessage(auth.reason)},{status:401});
   const user=JSON.parse(auth.params.get("user")??"{}");const sb=getSupabaseAdmin();
-  const {data:game}=await sb.from("position_games").select("title,question,send_images,show_own_choice,auto_send_results").eq("id",body.gameId).maybeSingle();
+  const {data:game}=await sb.from("position_games").select("title,question,position_labels,send_images,show_own_choice,auto_send_results").eq("id",body.gameId).maybeSingle();
   const {data:items}=await sb.from("position_items").select("id,name,media_url,media_type").eq("game_id",body.gameId);
   if(!game||!items?.length)return NextResponse.json({error:"Spiel nicht gefunden."},{status:404});
   const ids=new Set(items.map(i=>i.id));const ranks=new Set(body.ranking.map(r=>r.rank));
@@ -23,7 +23,8 @@ export async function POST(req:NextRequest){
   const target=Number(body.chatId)||Number(user.id);const isGroup=target<0;
   const {data:topic}=isGroup?await sb.from("group_topic_settings").select("results_thread_id").eq("chat_id",String(target)).maybeSingle():{data:null};
   const extra=topic?.results_thread_id?{message_thread_id:topic.results_thread_id}:{};
-  const text=[`<b>📍 ${esc(game.title)}</b>`,game.question?esc(game.question):"", "",...ordered.map(x=>`<b>${x.rank}.</b> ${esc(x.name)}`)].filter(Boolean).join("\n");
+  const labels=Array.isArray(game.position_labels)&&game.position_labels.length===items.length?game.position_labels:items.map((_,i)=>`${i+1}. Platz`);
+  const text=[`<b>📍 ${esc(game.title)}</b>`,game.question?esc(game.question):"", "",...ordered.map(x=>`<b>${esc(String(labels[x.rank-1]??x.rank))}:</b> ${esc(x.name)}`)].filter(Boolean).join("\n");
   if(game.auto_send_results!==false){
     if(game.send_images&&ordered[0]?.media_url){const m=ordered[0];const method=m.media_type==="animation"?"sendAnimation":"sendPhoto";const field=m.media_type==="animation"?"animation":"photo";await tg(token,method,{chat_id:target,...extra,[field]:m.media_url,caption:text,parse_mode:"HTML"});}
     else await tg(token,"sendMessage",{chat_id:target,...extra,text,parse_mode:"HTML"});
