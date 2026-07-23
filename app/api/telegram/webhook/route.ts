@@ -886,6 +886,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
   }
   if (action === "newguess") {
     if (role === "player") return send(token, chatId, "Nicht erlaubt.");
+    await setPositionSession(callback.from.id, { game_id: null, mode: "idle", ranking_mode: null, pending_value: null });
     return send(token, chatId, "<b>🧩 Neue Rate-Kategorie</b>\n\nWelche Art möchtest du erstellen?", { reply_markup: { inline_keyboard: [
       [{ text: "👤 Einzelne Influencerin", callback_data: "guessmode:single" }],
       [{ text: "👥 Mehrere Influencerinnen", callback_data: "guessmode:collection" }],
@@ -1146,6 +1147,7 @@ Wie sollen Spieler antworten?`, { reply_markup: { inline_keyboard: [
   }
   if (action === "newposition") {
     if(role==="player")return send(token,chatId,"Nicht erlaubt.");
+    await setGuessSession(callback.from.id, { game_id: null, person_id: null, mode: "idle", game_mode: null, pending_value: null });
     return send(token,chatId,"<b>📍 Neues Position Ranking</b>\n\nSollen die Influencerinnen nacheinander unbekannt erscheinen oder vorher alle sichtbar sein?",{reply_markup:{inline_keyboard:[
       [{text:"🎲 Blind Ranking",callback_data:"positionmode:blind"}],
       [{text:"👁 Alle vorher sichtbar",callback_data:"positionmode:open"}],
@@ -1154,6 +1156,7 @@ Wie sollen Spieler antworten?`, { reply_markup: { inline_keyboard: [
   }
   if (action === "positionmode") {
     if(!["blind","open"].includes(id))return send(token,chatId,"Ungültiger Modus.");
+    await setGuessSession(callback.from.id, { game_id: null, person_id: null, mode: "idle", game_mode: null, pending_value: null });
     await setPositionSession(callback.from.id,{game_id:null,mode:"awaiting_title",ranking_mode:id,pending_value:null});
     return send(token,chatId,"Sende jetzt einen neutralen Kategorienamen.",{reply_markup:{inline_keyboard:[backButton("newposition:x")]}});
   }
