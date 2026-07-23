@@ -268,3 +268,42 @@ create table if not exists bot_groups (
 );
 
 alter table bot_groups enable row level security;
+
+-- Version 4.5: eigene Rate-Auswahloptionen und Position Ranking
+alter table if exists guess_people add column if not exists distractors jsonb not null default '[]'::jsonb;
+alter table if exists guess_people add column if not exists auto_fill_choices boolean not null default true;
+
+create table if not exists position_games (
+  id uuid primary key default gen_random_uuid(), creator_id bigint not null, title text not null,
+  question text not null default 'Ordne deine Favoritinnen.', ranking_mode text not null default 'blind' check (ranking_mode in ('blind','open')),
+  position_labels jsonb not null default '[]'::jsonb, send_images boolean not null default true,
+  show_own_choice boolean not null default true, show_community_result boolean not null default true,
+  auto_send_results boolean not null default true, is_active boolean not null default false,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists position_items (
+  id uuid primary key default gen_random_uuid(), game_id uuid not null references position_games(id) on delete cascade,
+  name text not null, media_url text not null, media_type text not null default 'image' check(media_type in ('image','animation')),
+  sort_order integer not null default 0, created_at timestamptz not null default now()
+);
+create table if not exists position_votes (
+  id uuid primary key default gen_random_uuid(), game_id uuid not null references position_games(id) on delete cascade,
+  user_id bigint not null, chat_id text, created_at timestamptz not null default now()
+);
+create table if not exists position_vote_entries (
+  id uuid primary key default gen_random_uuid(), vote_id uuid not null references position_votes(id) on delete cascade,
+  item_id uuid not null references position_items(id) on delete cascade, rank integer not null,
+  unique(vote_id,item_id), unique(vote_id,rank)
+);
+create table if not exists position_admin_sessions (
+  user_id bigint primary key, game_id uuid references position_games(id) on delete cascade,
+  mode text not null default 'idle', ranking_mode text check(ranking_mode is null or ranking_mode in ('blind','open')),
+  pending_value text, updated_at timestamptz not null default now()
+);
+create index if not exists position_items_game_idx on position_items(game_id);
+create index if not exists position_votes_game_idx on position_votes(game_id,chat_id);
+alter table position_games enable row level security;
+alter table position_items enable row level security;
+alter table position_votes enable row level security;
+alter table position_vote_entries enable row level security;
+alter table position_admin_sessions enable row level security;

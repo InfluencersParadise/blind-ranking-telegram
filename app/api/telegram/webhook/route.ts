@@ -130,10 +130,10 @@ async function send(token: string, chatId: string | number, text: string, extra:
 }
 
 
-type ShareGameKind = "b" | "f" | "u" | "g";
+type ShareGameKind = "b" | "f" | "u" | "g" | "p";
 
 function shareKindLabel(kind: ShareGameKind) {
-  return kind === "b" ? "Blind Ranking" : kind === "f" ? "Fuck, Marry, Kill" : kind === "u" ? "Budget Challenge" : "Influencerin erraten";
+  return kind === "b" ? "Blind Ranking" : kind === "f" ? "Fuck, Marry, Kill" : kind === "u" ? "Budget Challenge" : kind === "g" ? "Influencerin erraten" : "Position Ranking";
 }
 
 async function registerKnownGroup(chat: TelegramChat) {
@@ -158,6 +158,7 @@ async function syncKnownGroups(token: string) {
     supabase.from("votes").select("chat_id").limit(500),
     supabase.from("budget_votes").select("chat_id").limit(500),
     supabase.from("guess_answers").select("chat_id").limit(500),
+    supabase.from("position_votes").select("chat_id").limit(500),
   ]);
 
   for (const source of sources) {
@@ -193,8 +194,8 @@ async function syncKnownGroups(token: string) {
 function miniAppUrlFor(kind: ShareGameKind, gameId: string, chatId: string | number) {
   const raw = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || "";
   const base = raw.startsWith("http") ? raw : `https://${raw}`;
-  const path = kind === "f" ? "/fmk" : kind === "u" ? "/budget" : kind === "g" ? "/guess" : "";
-  const idParam = kind === "u" || kind === "g" ? "game_id" : "category_id";
+  const path = kind === "f" ? "/fmk" : kind === "u" ? "/budget" : kind === "g" ? "/guess" : kind === "p" ? "/position" : "";
+  const idParam = kind === "u" || kind === "g" || kind === "p" ? "game_id" : "category_id";
   return `${base.replace(/\/$/, "")}${path}/?chat_id=${encodeURIComponent(String(chatId))}&${idParam}=${encodeURIComponent(gameId)}`;
 }
 
@@ -210,7 +211,11 @@ async function canManageShareGame(userId: number, role: BotRole, kind: ShareGame
     const { data } = await supabase.from("budget_games").select("creator_id").eq("id", gameId).maybeSingle();
     return Number(data?.creator_id) === userId;
   }
-  const { data } = await supabase.from("guess_games").select("creator_id").eq("id", gameId).maybeSingle();
+  if (kind === "g") {
+    const { data } = await supabase.from("guess_games").select("creator_id").eq("id", gameId).maybeSingle();
+    return Number(data?.creator_id) === userId;
+  }
+  const { data } = await supabase.from("position_games").select("creator_id").eq("id", gameId).maybeSingle();
   return Number(data?.creator_id) === userId;
 }
 
@@ -225,7 +230,11 @@ async function getShareGameTitle(kind: ShareGameKind, gameId: string) {
     const { data } = await supabase.from("budget_games").select("title").eq("id", gameId).maybeSingle();
     return data?.title as string | undefined ?? null;
   }
-  const { data } = await supabase.from("guess_games").select("title").eq("id", gameId).maybeSingle();
+  if (kind === "g") {
+    const { data } = await supabase.from("guess_games").select("title").eq("id", gameId).maybeSingle();
+    return data?.title as string | undefined ?? null;
+  }
+  const { data } = await supabase.from("position_games").select("title").eq("id", gameId).maybeSingle();
   return data?.title as string | undefined ?? null;
 }
 
@@ -270,11 +279,12 @@ async function sendGameToGroup(token: string, kind: ShareGameKind, gameId: strin
   const title = await getShareGameTitle(kind, gameId);
   if (!title) throw new Error("Spiel nicht gefunden.");
   const bot = await telegramApi(token, "getMe", {});
-  const payloadType = kind === "b" ? "group" : kind === "f" ? "fmk" : kind === "u" ? "budget" : "guess";
+  const payloadType = kind === "b" ? "group" : kind === "f" ? "fmk" : kind === "u" ? "budget" : kind === "g" ? "guess" : "position";
   const deepLink = `https://t.me/${bot.username}?start=${payloadType}_${groupId}_${gameId}`;
-  const heading = kind === "b" ? "🎲 <b>Blind Ranking</b>" : kind === "f" ? "🔥 <b>Fuck, Marry, Kill</b>" : kind === "u" ? "💰 <b>Budget Challenge</b>" : "🧩 <b>Influencerin erraten</b>";
-  const button = kind === "b" ? "🎮 Blind Ranking starten" : kind === "f" ? "🔥 FMK starten" : kind === "u" ? "💰 Budget-Spiel starten" : "🧩 Ratespiel starten";
-  await send(token, groupId, `${heading}\nSpiel: <b>${escapeHtml(title)}</b>\n\nTippe auf den Button, um mitzuspielen.`, { reply_markup: { inline_keyboard: [[{ text: button, url: deepLink }]] } });
+  const heading = kind === "b" ? "🎲 <b>Blind Ranking</b>" : kind === "f" ? "🔥 <b>Fuck, Marry, Kill</b>" : kind === "u" ? "💰 <b>Budget Challenge</b>" : kind === "g" ? "🧩 <b>Influencerin erraten</b>" : "📍 <b>Position Ranking</b>";
+  const button = kind === "b" ? "🎮 Blind Ranking starten" : kind === "f" ? "🔥 FMK starten" : kind === "u" ? "💰 Budget-Spiel starten" : kind === "g" ? "🧩 Ratespiel starten" : "📍 Position Ranking starten";
+  const topicSettings = await getGroupTopicSettings(groupId);
+  await send(token, groupId, `${heading}\nSpiel: <b>${escapeHtml(title)}</b>\n\nTippe auf den Button, um mitzuspielen.`, { ...topicExtra(topicSettings.poll_thread_id), reply_markup: { inline_keyboard: [[{ text: button, url: deepLink }]] } });
 }
 
 async function lookupTelegramUser(token: string, userId: number): Promise<TelegramUser> {
@@ -442,6 +452,25 @@ async function setGuessSession(userId: number, values: Partial<GuessSessionRow>)
   });
   if (error) throw error;
 }
+type PositionSessionRow = { game_id: string | null; mode: string; ranking_mode: string | null; pending_value: string | null };
+async function getPositionSession(userId: number): Promise<PositionSessionRow | null> {
+  const { data, error } = await getSupabaseAdmin().from("position_admin_sessions").select("game_id,mode,ranking_mode,pending_value").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data as PositionSessionRow | null;
+}
+async function setPositionSession(userId: number, values: Partial<PositionSessionRow>) {
+  const existing = await getPositionSession(userId);
+  const { error } = await getSupabaseAdmin().from("position_admin_sessions").upsert({
+    user_id: userId,
+    game_id: values.game_id !== undefined ? values.game_id : existing?.game_id ?? null,
+    mode: values.mode ?? existing?.mode ?? "idle",
+    ranking_mode: values.ranking_mode !== undefined ? values.ranking_mode : existing?.ranking_mode ?? null,
+    pending_value: values.pending_value !== undefined ? values.pending_value : existing?.pending_value ?? null,
+    updated_at: new Date().toISOString()
+  });
+  if (error) throw error;
+}
+
 function normalizedGuessName(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/@/g, "").replace(/[^a-z0-9äöüß]+/gi, " ").trim();
 }
@@ -725,21 +754,21 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
   if (action === "privateplay") {
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
-    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    if (!(["b", "f", "u", "g", "p"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
     const title = await getShareGameTitle(kind, gameId);
     if (!title) return send(token, chatId, "Spiel nicht gefunden.");
-    const labels: Record<ShareGameKind, string> = { b: "🏆 Blind Ranking öffnen", f: "🔥 FMK öffnen", u: "💰 Budget-Spiel öffnen", g: "🧩 Ratespiel öffnen" };
-    return send(token, chatId, `<b>${escapeHtml(title)}</b>\n\nStarte das Spiel direkt im privaten Chat:`, { reply_markup: { inline_keyboard: [[{ text: labels[kind], web_app: { url: miniAppUrlFor(kind, gameId, chatId) } }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`)] } });
+    const labels: Record<ShareGameKind, string> = { b: "🏆 Blind Ranking öffnen", f: "🔥 FMK öffnen", u: "💰 Budget-Spiel öffnen", g: "🧩 Ratespiel öffnen", p: "📍 Position Ranking öffnen" };
+    return send(token, chatId, `<b>${escapeHtml(title)}</b>\n\nStarte das Spiel direkt im privaten Chat:`, { reply_markup: { inline_keyboard: [[{ text: labels[kind], web_app: { url: miniAppUrlFor(kind, gameId, chatId) } }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : kind === "g" ? `guesscat:${gameId}` : `positioncat:${gameId}`)] } });
   }
   if (action === "syncgrp") {
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
-    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    if (!(["b", "f", "u", "g", "p"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
     const statusMessage = await send(token, chatId, "🔍 <b>Gruppen und Berechtigungen werden geprüft …</b>\n\nBitte einen Moment warten.");
     try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
     try {
       await syncKnownGroups(token);
-      const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
+      const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : kind === "g" ? `guesscat:${gameId}` : `positioncat:${gameId}`;
       try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
       return showGroupPicker(token, chatId, callback.from.id, role, kind, gameId, back);
     } catch (error) {
@@ -750,10 +779,10 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
   if (action === "grp") {
     const [kindRaw, gameId] = id.split("|");
     const kind = kindRaw as ShareGameKind;
-    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
+    if (!(["b", "f", "u", "g", "p"] as string[]).includes(kind) || !gameId) return send(token, chatId, "Ungültige Spielauswahl.");
     const statusMessage = await send(token, chatId, "🔍 <b>Gruppen und Berechtigungen werden geprüft …</b>\n\nBitte einen Moment warten.");
     try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: callback.message.message_id }); } catch {}
-    const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`;
+    const back = kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : kind === "g" ? `guesscat:${gameId}` : `positioncat:${gameId}`;
     try {
       await syncKnownGroups(token);
       try { await telegramApi(token, "deleteMessage", { chat_id: chatId, message_id: statusMessage.message_id }); } catch {}
@@ -767,7 +796,7 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
     const [kindRaw, gameId, groupIdRaw] = id.split("|");
     const kind = kindRaw as ShareGameKind;
     const groupId = Number(groupIdRaw);
-    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
+    if (!(["b", "f", "u", "g", "p"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
     if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
     const check = await telegramAdminCheck(token, groupId, callback.from.id);
     if (!check.userAllowed) return send(token, chatId, "Du bist in dieser Gruppe nicht mehr Administrator oder Eigentümer.");
@@ -780,12 +809,12 @@ async function handleCallback(token: string, callback: CallbackQuery, ownerId: n
     const [kindRaw, gameId, groupIdRaw] = id.split("|");
     const kind = kindRaw as ShareGameKind;
     const groupId = Number(groupIdRaw);
-    if (!(["b", "f", "u", "g"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
+    if (!(["b", "f", "u", "g", "p"] as string[]).includes(kind) || !gameId || !Number.isSafeInteger(groupId)) return send(token, chatId, "Ungültige Auswahl.");
     if (!(await canManageShareGame(callback.from.id, role, kind, gameId))) return send(token, chatId, "Du darfst dieses Spiel nicht starten.");
     const check = await telegramAdminCheck(token, groupId, callback.from.id);
     if (!check.userAllowed || !check.botAllowed) return send(token, chatId, "Start nicht erlaubt. Du und der Bot müssen in der Gruppe Administrator sein.");
     await sendGameToGroup(token, kind, gameId, groupId);
-    return send(token, chatId, "✅ Das Spiel wurde in der Gruppe gestartet.", { reply_markup: { inline_keyboard: [[{ text: "📣 In weiterer Gruppe starten", callback_data: `grp:${kind}|${gameId}` }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : `guesscat:${gameId}`)] } });
+    return send(token, chatId, "✅ Das Spiel wurde in der Gruppe gestartet.", { reply_markup: { inline_keyboard: [[{ text: "📣 In weiterer Gruppe starten", callback_data: `grp:${kind}|${gameId}` }], backButton(kind === "b" || kind === "f" ? `cat:${gameId}` : kind === "u" ? `budgetcat:${gameId}` : kind === "g" ? `guesscat:${gameId}` : `positioncat:${gameId}`)] } });
   }
   if (action === "tokenredeem") {
     if (role !== "player") return send(token, chatId, "Du bist bereits Owner oder Creator.", { reply_markup: { inline_keyboard: [backButton("menuhelp:x")] } });
@@ -801,6 +830,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "newfmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "newbudget:x" }],
       [{ text: "🧩 Influencerin erraten", callback_data: "newguess:x" }],
+      [{ text: "📍 Position Ranking", callback_data: "newposition:x" }],
       backButton("menuhelp:x")
     ] } });
   }
@@ -810,6 +840,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "playfmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "playbudget:x" }],
       [{ text: "🧩 Influencerin erraten", callback_data: "playguess:x" }],
+      [{ text: "📍 Position Ranking", callback_data: "playposition:x" }],
       backButton("menuhelp:x")
     ] } });
   }
@@ -840,6 +871,7 @@ Sende jetzt deinen vollständigen Token, zum Beispiel <code>BR-XXXX-XXXX-XXXX</c
       [{ text: "🔥 Fuck, Marry, Kill", callback_data: "managefmk:x" }],
       [{ text: "💰 Budget Challenge", callback_data: "managebudget:x" }],
       [{ text: "🧩 Influencerin erraten", callback_data: "manageguess:x" }],
+      [{ text: "📍 Position Ranking", callback_data: "manageposition:x" }],
       backButton("menuhelp:x")
     ] } });
   }
@@ -997,8 +1029,20 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
   }
   if (action === "guessmode") {
     try { await assertCreatorCanCreate(callback.from.id, role); } catch (error) { return send(token, chatId, error instanceof Error ? error.message : "Nicht erlaubt."); }
-    await supabase.from("guess_admin_sessions").upsert({ user_id: callback.from.id, mode: "awaiting_title", game_mode: id, updated_at: new Date().toISOString() });
-    return send(token, chatId, `<b>${id === "single" ? "👤 Einzelne Influencerin" : "👥 Mehrere Influencerinnen"}</b>\n\nSende jetzt einen neutralen Spielnamen, der die Lösung nicht verrät.`, { reply_markup: { inline_keyboard: [backButton("newguess:x")] } });
+    return send(token, chatId, `<b>${id === "single" ? "👤 Einzelne Influencerin" : "👥 Mehrere Influencerinnen"}</b>
+
+Wie sollen Spieler antworten?`, { reply_markup: { inline_keyboard: [
+      [{ text: "⌨️ Namen eingeben", callback_data: `guesscreatemode:${id}|free_text` }],
+      [{ text: "🔘 Namen auswählen", callback_data: `guesscreatemode:${id}|multiple_choice` }],
+      [{ text: "🎲 Gemischter Modus", callback_data: `guesscreatemode:${id}|mixed` }],
+      backButton("newguess:x")
+    ] } });
+  }
+  if (action === "guesscreatemode") {
+    const [gameMode, answerMode] = id.split("|");
+    if (!["single", "collection"].includes(gameMode) || !["free_text", "multiple_choice", "mixed"].includes(answerMode)) return send(token, chatId, "Ungültige Auswahl.");
+    await setGuessSession(callback.from.id, { game_id: null, person_id: null, mode: "awaiting_title", game_mode: gameMode, pending_value: answerMode });
+    return send(token, chatId, "Sende jetzt einen neutralen Spielnamen, der die Lösung nicht verrät.", { reply_markup: { inline_keyboard: [backButton("newguess:x")] } });
   }
   if (action === "addguessperson") {
     const { data:game } = await supabase.from("guess_games").select("game_mode").eq("id", id).maybeSingle();
@@ -1019,13 +1063,14 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
     return send(token, chatId, `✅ <b>${escapeHtml(g?.title ?? "Rate-Kategorie")}</b> ist fertig.`, { reply_markup: { inline_keyboard: [[{text:"▶️ Privat starten",callback_data:`privateplay:g|${id}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:g|${id}`}],backButton(`guesscat:${id}`)] } });
   }
   if (action === "guessperson") {
-    const { data:p } = await supabase.from("guess_people").select("id,game_id,display_name,aliases,social_handle").eq("id", id).maybeSingle();
+    const { data:p } = await supabase.from("guess_people").select("id,game_id,display_name,aliases,social_handle,distractors,auto_fill_choices").eq("id", id).maybeSingle();
     if (!p) return send(token, chatId, "Influencerin nicht gefunden.");
     const { count } = await supabase.from("guess_media").select("id", { count:"exact", head:true }).eq("person_id", id);
     return send(token, chatId, `<b>⚙️ Influencerin verwalten</b>\n\n<b>${escapeHtml(p.display_name)}</b>\nHinweise: <b>${count ?? 0}</b>`, { reply_markup: { inline_keyboard: [
       [{text:"🖼 Hinweise ansehen",callback_data:`guessmedia:${id}`}],
       [{text:"➕ Hinweis hinzufügen",callback_data:`addguessmedia:${id}`}],
       [{text:"🔤 Aliase bearbeiten",callback_data:`guessaliases:${id}`}],
+      [{text:"🔘 Antwortnamen verwalten",callback_data:`guesschoices:${id}`}],
       [{text:"🗑 Influencerin entfernen",callback_data:`deleteguesspersonask:${id}`}],
       backButton(`guesspeople:${p.game_id}`)
     ] } });
@@ -1062,6 +1107,146 @@ Hinweise: <b>${g.hints_enabled ? "Ja" : "Nein"}</b>`, { reply_markup: { inline_k
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || "";
     const url = `${baseUrl.startsWith("http") ? baseUrl : `https://${baseUrl}`}/guess?gameId=${g.id}`;
     return send(token, chatId, `<b>🧩 ${escapeHtml(g.title)}</b>`, { reply_markup: { inline_keyboard: [[{ text: "🧩 Spiel öffnen", web_app: { url } }], backButton("manageguess:x")] } });
+  }
+  if (action === "guesschoices") {
+    const { data:p } = await supabase.from("guess_people").select("game_id,display_name,distractors,auto_fill_choices").eq("id", id).maybeSingle();
+    if (!p) return send(token, chatId, "Influencerin nicht gefunden.");
+    const names = Array.isArray(p.distractors) ? p.distractors : [];
+    return send(token, chatId, `<b>🔘 Antwortnamen verwalten</b>\n\nRichtige Lösung: <b>${escapeHtml(p.display_name)}</b>\nEigene falsche Namen: <b>${names.length}</b>\nAutomatisch ergänzen: <b>${p.auto_fill_choices ? "Ja" : "Nein"}</b>\n\n${names.map((v:string,i:number)=>`${i+1}. ${escapeHtml(v)}`).join("\n") || "Noch keine eigenen Namen."}`, { reply_markup:{ inline_keyboard:[
+      [{text:"➕ Namen eingeben / ersetzen",callback_data:`editguesschoices:${id}`}],
+      [{text:p.auto_fill_choices?"🚫 Nicht automatisch ergänzen":"🎲 Automatisch ergänzen",callback_data:`toggleguessautofill:${id}`}],
+      [{text:"🗑 Eigene Namen leeren",callback_data:`clearguesschoices:${id}`}],
+      backButton(`guessperson:${id}`)
+    ]}});
+  }
+  if (action === "editguesschoices") {
+    const { data:p } = await supabase.from("guess_people").select("game_id").eq("id", id).maybeSingle();
+    if (!p) return send(token, chatId, "Influencerin nicht gefunden.");
+    await setGuessSession(callback.from.id,{game_id:p.game_id,person_id:id,mode:"awaiting_distractors"});
+    return send(token, chatId, "Sende die falschen Antwortnamen mit Komma getrennt. Beispiel:\n<code>Pamela Reif, Lisa Marie Schiffner, Bianca Heinicke</code>", {reply_markup:{inline_keyboard:[backButton(`guesschoices:${id}`)]}});
+  }
+  if (action === "toggleguessautofill") {
+    const {data:p}=await supabase.from("guess_people").select("auto_fill_choices").eq("id",id).maybeSingle();
+    if(!p)return send(token,chatId,"Influencerin nicht gefunden.");
+    await supabase.from("guess_people").update({auto_fill_choices:!p.auto_fill_choices}).eq("id",id);
+    return handleCallback(token,{...callback,data:`guesschoices:${id}`},ownerId);
+  }
+  if (action === "clearguesschoices") {
+    await supabase.from("guess_people").update({distractors:[]}).eq("id",id);
+    return handleCallback(token,{...callback,data:`guesschoices:${id}`},ownerId);
+  }
+  if (action === "manageposition") {
+    if (role === "player") return send(token,chatId,"Nur Owner oder Creator dürfen Position Rankings verwalten.");
+    return send(token,chatId,"<b>📍 Position Ranking</b>",{reply_markup:{inline_keyboard:[
+      [{text:"➕ Neue Kategorie",callback_data:"newposition:x"}],
+      [{text:"📂 Kategorien verwalten",callback_data:"catsposition:x"}],
+      [{text:"🎮 Aktives Spiel öffnen",callback_data:"playposition:x"}],
+      backButton("gamesmenu:x")
+    ]}});
+  }
+  if (action === "newposition") {
+    if(role==="player")return send(token,chatId,"Nicht erlaubt.");
+    return send(token,chatId,"<b>📍 Neues Position Ranking</b>\n\nSollen die Influencerinnen nacheinander unbekannt erscheinen oder vorher alle sichtbar sein?",{reply_markup:{inline_keyboard:[
+      [{text:"🎲 Blind Ranking",callback_data:"positionmode:blind"}],
+      [{text:"👁 Alle vorher sichtbar",callback_data:"positionmode:open"}],
+      backButton("manageposition:x")
+    ]}});
+  }
+  if (action === "positionmode") {
+    if(!["blind","open"].includes(id))return send(token,chatId,"Ungültiger Modus.");
+    await setPositionSession(callback.from.id,{game_id:null,mode:"awaiting_title",ranking_mode:id,pending_value:null});
+    return send(token,chatId,"Sende jetzt einen neutralen Kategorienamen.",{reply_markup:{inline_keyboard:[backButton("newposition:x")]}});
+  }
+  if (action === "catsposition") {
+    let q=supabase.from("position_games").select("id,title,is_active,creator_id").order("created_at",{ascending:false});
+    if(role==="creator")q=q.eq("creator_id",callback.from.id);
+    const {data}=await q;
+    const rows=(data??[]).map((g:any)=>[{text:`${g.is_active?"✅":"⏸"} ${g.title}`,callback_data:`positioncat:${g.id}`}]);
+    return send(token,chatId,"<b>📍 Kategorien verwalten</b>",{reply_markup:{inline_keyboard:[...rows,backButton("manageposition:x")]}});
+  }
+  if (action === "positioncat") {
+    const {data:g}=await supabase.from("position_games").select("id,title,question,ranking_mode,send_images,is_active").eq("id",id).maybeSingle();
+    if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",id);
+    return send(token,chatId,`<b>⚙️ Kategorie verwalten</b>\n\n<b>${escapeHtml(g.title)}</b>\nModus: <b>${g.ranking_mode==="blind"?"Blind":"Alle sichtbar"}</b>\nInfluencerinnen: <b>${count??0}</b>\nFrage: ${escapeHtml(g.question)}`,{reply_markup:{inline_keyboard:[
+      [{text:"▶️ Privat starten",callback_data:`privateplay:p|${id}`}],
+      [{text:"📣 In Gruppe starten",callback_data:`grp:p|${id}`}],
+      [{text:"🖼 Medien verwalten",callback_data:`positionmedia:${id}`}],
+      [{text:"✏️ Kategorie umbenennen",callback_data:`renameposition:${id}`}],
+      [{text:"📊 Ergebnisse & Statistiken",callback_data:`positionstats:${id}`}],
+      [{text:"⚙️ Ergebnis-Einstellungen",callback_data:`positionresults:${id}`}],
+      [{text:"🎮 Spieleinstellungen",callback_data:`positionsettings:${id}`}],
+      [{text:"🗑 Kategorie löschen",callback_data:`deleteposition:${id}`}],
+      backButton("catsposition:x")
+    ]}});
+  }
+  if (action === "positionmedia") {
+    const {data:items}=await supabase.from("position_items").select("id,name,media_url,media_type,sort_order").eq("game_id",id).order("sort_order");
+    for(const item of items??[]){const method=item.media_type==="animation"?"sendAnimation":"sendPhoto";const field=item.media_type==="animation"?"animation":"photo";await telegramApi(token,method,{chat_id:chatId,[field]:item.media_url,caption:item.name});}
+    return send(token,chatId,"<b>🖼 Medien verwalten</b>",{reply_markup:{inline_keyboard:[[{text:"➕ Influencerin hinzufügen",callback_data:`addposition:${id}`}],backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "renameposition") {
+    await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_rename"});
+    return send(token,chatId,"Sende jetzt den neuen Kategorienamen.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "positionstats") {
+    const {count}=await supabase.from("position_votes").select("id",{count:"exact",head:true}).eq("game_id",id);
+    return send(token,chatId,`<b>📊 Ergebnisse & Statistiken</b>
+
+Abgegebene Rankings: <b>${count??0}</b>`,{reply_markup:{inline_keyboard:[backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "positionresults") {
+    const {data:g}=await supabase.from("position_games").select("send_images,show_own_choice,show_community_result,auto_send_results").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    return send(token,chatId,"<b>⚙️ Ergebnis-Einstellungen</b>",{reply_markup:{inline_keyboard:[
+      [{text:`🖼 Bilder/GIFs senden: ${g.send_images?"✅ Ja":"❌ Nein"}`,callback_data:`togglepositionimages:${id}`}],
+      backButton(`positioncat:${id}`)
+    ]}});
+  }
+  if (action === "positionsettings") {
+    const {data:g}=await supabase.from("position_games").select("ranking_mode,question").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    return send(token,chatId,`<b>🎮 Spieleinstellungen</b>
+
+Modus: <b>${g.ranking_mode==="blind"?"Blind Ranking":"Alle sichtbar"}</b>
+Frage: ${escapeHtml(g.question)}`,{reply_markup:{inline_keyboard:[
+      [{text:g.ranking_mode==="blind"?"👁 Auf alle sichtbar wechseln":"🎲 Auf Blind Ranking wechseln",callback_data:`togglepositionmode:${id}`}],
+      [{text:"❓ Frage bearbeiten",callback_data:`editpositionquestion:${id}`}],
+      backButton(`positioncat:${id}`)
+    ]}});
+  }
+  if (action === "togglepositionmode") {
+    const {data:g}=await supabase.from("position_games").select("ranking_mode").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    await supabase.from("position_games").update({ranking_mode:g.ranking_mode==="blind"?"open":"blind"}).eq("id",id);
+    return send(token,chatId,"✅ Modus geändert.",{reply_markup:{inline_keyboard:[backButton(`positionsettings:${id}`)]}});
+  }
+  if (action === "editpositionquestion") {
+    await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_question_edit"});
+    return send(token,chatId,"Sende jetzt die neue Frage oder Aufgabenstellung.",{reply_markup:{inline_keyboard:[backButton(`positionsettings:${id}`)]}});
+  }
+  if (action === "addposition") {
+    await setPositionSession(callback.from.id,{game_id:id,mode:"awaiting_item_media"});
+    return send(token,chatId,"Sende ein Bild oder GIF mit dem Namen der Influencerin als Bildunterschrift.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "finishposition") {
+    const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",id);
+    if((count??0)<2)return send(token,chatId,"Füge mindestens zwei Influencerinnen hinzu.");
+    const labels=Array.from({length:count??0},(_,i)=>`${i+1}. Platz`);
+    await supabase.from("position_games").update({is_active:true,position_labels:labels,updated_at:new Date().toISOString()}).eq("id",id);
+    await setPositionSession(callback.from.id,{game_id:null,mode:"idle"});
+    return send(token,chatId,"✅ Position Ranking ist fertig.",{reply_markup:{inline_keyboard:[[{text:"▶️ Privat starten",callback_data:`privateplay:p|${id}`}],[{text:"📣 In Gruppe starten",callback_data:`grp:p|${id}`}],backButton(`positioncat:${id}`)]}});
+  }
+  if (action === "togglepositionimages") {
+    const {data:g}=await supabase.from("position_games").select("send_images").eq("id",id).maybeSingle();if(!g)return send(token,chatId,"Kategorie nicht gefunden.");
+    await supabase.from("position_games").update({send_images:!g.send_images}).eq("id",id);
+    return handleCallback(token,{...callback,data:`positioncat:${id}`},ownerId);
+  }
+  if (action === "deleteposition") {
+    await supabase.from("position_games").delete().eq("id",id);
+    return send(token,chatId,"✅ Kategorie gelöscht.",{reply_markup:{inline_keyboard:[backButton("catsposition:x")]}});
+  }
+  if (action === "playposition") {
+    let q=supabase.from("position_games").select("id,title").eq("is_active",true).order("created_at",{ascending:false}).limit(1);if(role==="creator")q=q.eq("creator_id",callback.from.id);
+    const {data}=await q;const g=data?.[0];if(!g)return send(token,chatId,"Keine aktive Kategorie gefunden.");
+    return send(token,chatId,`<b>📍 ${escapeHtml(g.title)}</b>`,{reply_markup:{inline_keyboard:[[{text:"📍 Spiel öffnen",web_app:{url:miniAppUrlFor("p",g.id,chatId)}}],backButton("manageposition:x")]}});
   }
   if (action === "managebudget") {
     if (role === "player") return send(token, chatId, "Nur Owner oder Creator dürfen Budget-Spiele verwalten.");
@@ -1615,7 +1800,7 @@ export async function POST(request: NextRequest) {
       const guessSession = await getGuessSession(userId);
       if (guessSession?.mode === "awaiting_title" && text && !isCommand) {
         const title = text.trim();
-        const { data: game, error } = await supabase.from("guess_games").insert({ creator_id: userId, title, game_mode: guessSession.game_mode ?? "collection", answer_mode: "free_text", hints_enabled: true, send_images: true, is_active: false }).select("id,title").single();
+        const { data: game, error } = await supabase.from("guess_games").insert({ creator_id: userId, title, game_mode: guessSession.game_mode ?? "collection", answer_mode: ["free_text", "multiple_choice", "mixed"].includes(guessSession.pending_value ?? "") ? guessSession.pending_value : "free_text", hints_enabled: true, send_images: true, is_active: false }).select("id,title").single();
         if (error) throw error;
         await incrementCreatorUsage(userId, role);
         await setGuessSession(userId, { game_id: game.id, person_id: null, mode: "awaiting_person_name", pending_value: null });
@@ -1637,6 +1822,27 @@ export async function POST(request: NextRequest) {
         await send(token, chatId, "✅ Alternative Namen wurden gespeichert.", { reply_markup: { inline_keyboard: [backButton(`guessperson:${guessSession.person_id}`)] } });
         return NextResponse.json({ ok: true });
       }
+      if (guessSession?.mode === "awaiting_distractors_initial" && guessSession.person_id && text && !isCommand) {
+        const automatic = /^automatisch$/i.test(text.trim());
+        const values = automatic ? [] : Array.from(new Set(text.split(",").map(v => v.trim()).filter(Boolean)));
+        const { data: person } = await supabase.from("guess_people").select("display_name").eq("id", guessSession.person_id).maybeSingle();
+        const filtered = values.filter(v => normalizedGuessName(v) !== normalizedGuessName(person?.display_name ?? ""));
+        await supabase.from("guess_people").update({ distractors: filtered, auto_fill_choices: automatic }).eq("id", guessSession.person_id);
+        await setGuessSession(userId, { mode: "awaiting_hint_media" });
+        await send(token, chatId, `✅ Antwortauswahl gespeichert.
+
+Sende jetzt den ersten Bildausschnitt oder ein GIF.`);
+        return NextResponse.json({ ok: true });
+      }
+      if (guessSession?.mode === "awaiting_distractors" && guessSession.person_id && text && !isCommand) {
+        const values = Array.from(new Set(text.split(",").map(v => v.trim()).filter(Boolean)));
+        const { data:person } = await supabase.from("guess_people").select("display_name").eq("id",guessSession.person_id).maybeSingle();
+        const filtered = values.filter(v => normalizedGuessName(v) !== normalizedGuessName(person?.display_name ?? ""));
+        await supabase.from("guess_people").update({ distractors: filtered }).eq("id", guessSession.person_id);
+        await setGuessSession(userId, { mode: "idle" });
+        await send(token, chatId, `✅ ${filtered.length} eigene Antwortnamen gespeichert.`, { reply_markup: { inline_keyboard: [backButton(`guesschoices:${guessSession.person_id}`)] } });
+        return NextResponse.json({ ok: true });
+      }
       if (guessSession?.mode === "awaiting_person_name" && guessSession.game_id && text && !isCommand) {
         const { count } = await supabase.from("guess_people").select("id", {count:"exact",head:true}).eq("game_id",guessSession.game_id);
         const { data: person, error } = await supabase.from("guess_people").insert({ game_id: guessSession.game_id, display_name: text.trim(), aliases: [], sort_order: (count ?? 0)+1 }).select("id,display_name").single();
@@ -1646,10 +1852,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
       if (guessSession?.mode === "awaiting_aliases" && guessSession.person_id && text && !isCommand) {
-        const aliases = /^keine$/i.test(text.trim()) ? [] : text.split(",").map(v=>v.trim()).filter(Boolean);
+        const aliases = /^keine$/i.test(text.trim()) ? [] : text.split(",").map(v => v.trim()).filter(Boolean);
         await supabase.from("guess_people").update({ aliases }).eq("id", guessSession.person_id);
-        await setGuessSession(userId, { mode: "awaiting_hint_media" });
-        await send(token, chatId, "Sende jetzt den ersten Bildausschnitt oder ein GIF. Weitere Medien kannst du anschließend direkt hinzufügen.");
+        const { data: personGame } = await supabase.from("guess_people").select("game_id").eq("id", guessSession.person_id).maybeSingle();
+        const { data: guessGame } = personGame?.game_id ? await supabase.from("guess_games").select("answer_mode").eq("id", personGame.game_id).maybeSingle() : { data: null };
+        if (guessGame?.answer_mode === "multiple_choice" || guessGame?.answer_mode === "mixed") {
+          await setGuessSession(userId, { mode: "awaiting_distractors_initial" });
+          await send(token, chatId, `Sende jetzt die falschen Antwortnamen mit Komma getrennt. Beispiel:
+<code>Pamela Reif, Lisa Marie Schiffner, Bianca Heinicke</code>
+
+Sende <code>Automatisch</code>, wenn fehlende Namen automatisch ergänzt werden dürfen.`);
+        } else {
+          await setGuessSession(userId, { mode: "awaiting_hint_media" });
+          await send(token, chatId, "Sende jetzt den ersten Bildausschnitt oder ein GIF. Weitere Medien kannst du anschließend direkt hinzufügen.");
+        }
         return NextResponse.json({ ok: true });
       }
       const guessPhoto = message.photo?.at(-1);
@@ -1670,6 +1886,47 @@ export async function POST(request: NextRequest) {
         ];
         await send(token, chatId, `✅ Hinweis ${(count??0)+1} für <b>${escapeHtml(p.display_name)}</b> gespeichert.`, { reply_markup: { inline_keyboard: nextRows } });
         return NextResponse.json({ ok: true });
+      }
+      const positionSession = await getPositionSession(userId);
+      if (positionSession?.mode === "awaiting_title" && text && !isCommand) {
+        const {data:game,error}=await supabase.from("position_games").insert({creator_id:userId,title:text.trim(),ranking_mode:positionSession.ranking_mode??"blind",question:"Ordne deine Favoritinnen.",is_active:false}).select("id,title").single();
+        if(error)throw error;
+        await incrementCreatorUsage(userId,role);
+        await setPositionSession(userId,{game_id:game.id,mode:"awaiting_question"});
+        await send(token,chatId,`✅ <b>${escapeHtml(game.title)}</b> wurde erstellt.
+
+Sende jetzt die Frage oder Aufgabenstellung, die Spieler sehen sollen.`,{reply_markup:{inline_keyboard:[backButton(`positioncat:${game.id}`)]}});
+        return NextResponse.json({ok:true});
+      }
+      if (positionSession?.mode === "awaiting_rename" && positionSession.game_id && text && !isCommand) {
+        await supabase.from("position_games").update({title:text.trim(),updated_at:new Date().toISOString()}).eq("id",positionSession.game_id);
+        await setPositionSession(userId,{mode:"idle"});
+        await send(token,chatId,"✅ Kategorie umbenannt.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${positionSession.game_id}`)]}});
+        return NextResponse.json({ok:true});
+      }
+      if (positionSession?.mode === "awaiting_question_edit" && positionSession.game_id && text && !isCommand) {
+        await supabase.from("position_games").update({question:text.trim(),updated_at:new Date().toISOString()}).eq("id",positionSession.game_id);
+        await setPositionSession(userId,{mode:"idle"});
+        await send(token,chatId,"✅ Frage gespeichert.",{reply_markup:{inline_keyboard:[backButton(`positionsettings:${positionSession.game_id}`)]}});
+        return NextResponse.json({ok:true});
+      }
+      if (positionSession?.mode === "awaiting_question" && positionSession.game_id && text && !isCommand) {
+        await supabase.from("position_games").update({question:text.trim()}).eq("id",positionSession.game_id);
+        await setPositionSession(userId,{mode:"awaiting_item_media"});
+        await send(token,chatId,"Sende jetzt ein Bild oder GIF mit dem Namen der Influencerin als Bildunterschrift.",{reply_markup:{inline_keyboard:[backButton(`positioncat:${positionSession.game_id}`)]}});
+        return NextResponse.json({ok:true});
+      }
+      const positionPhoto = message.photo?.at(-1);
+      const positionAnimation = (message as any).animation as {file_id:string}|undefined;
+      if(positionSession?.mode === "awaiting_item_media" && positionSession.game_id && (positionPhoto||positionAnimation)){
+        const name=(message.caption??"").trim();
+        if(!name){await send(token,chatId,"Bitte sende das Bild oder GIF erneut und schreibe den Namen als Bildunterschrift dazu.");return NextResponse.json({ok:true});}
+        const fileId=positionPhoto?.file_id??positionAnimation!.file_id;
+        const uploaded=await uploadTelegramPhoto(token,fileId,userId);
+        const {count}=await supabase.from("position_items").select("id",{count:"exact",head:true}).eq("game_id",positionSession.game_id);
+        await supabase.from("position_items").insert({game_id:positionSession.game_id,name,media_url:uploaded.imageUrl,media_type:positionAnimation?"animation":"image",sort_order:(count??0)+1});
+        await send(token,chatId,`✅ <b>${escapeHtml(name)}</b> hinzugefügt.`,{reply_markup:{inline_keyboard:[[{text:"➕ Weitere Influencerin",callback_data:`addposition:${positionSession.game_id}`}],[{text:"✅ Kategorie abschließen",callback_data:`finishposition:${positionSession.game_id}`}],backButton(`positioncat:${positionSession.game_id}`)]}});
+        return NextResponse.json({ok:true});
       }
       const budgetSession = await getBudgetSession(userId);
       if (budgetSession?.mode === "awaiting_budget_rename" && budgetSession.game_id && text && !isCommand) {
@@ -2217,12 +2474,12 @@ Neues Kontingent wählen:`, {
     }
 
     const startPayload = command === "/start" ? text.split(/\s+/)[1] ?? "" : "";
-    const match = startPayload.match(/^(group|fmk|budget|guess)_(-?\d+)_([0-9a-f-]{36})$/i);
+    const match = startPayload.match(/^(group|fmk|budget|guess|position)_(-?\d+)_([0-9a-f-]{36})$/i);
     let targetChatId = chatId;
     let categoryId: string | null = null;
-    let startGameType: "blind_ranking" | "fmk" | "budget" | "guess" = "blind_ranking";
+    let startGameType: "blind_ranking" | "fmk" | "budget" | "guess" | "position" = "blind_ranking";
     if (match) {
-      startGameType = match[1] === "fmk" ? "fmk" : match[1] === "budget" ? "budget" : match[1] === "guess" ? "guess" : "blind_ranking";
+      startGameType = match[1] === "fmk" ? "fmk" : match[1] === "budget" ? "budget" : match[1] === "guess" ? "guess" : match[1] === "position" ? "position" : "blind_ranking";
       targetChatId = match[2];
       categoryId = match[3];
     } else {
@@ -2233,11 +2490,11 @@ Neues Kontingent wählen:`, {
       await send(token, chatId, "Noch keine aktive Kategorie vorhanden.");
       return NextResponse.json({ ok: true });
     }
-    const miniPath = startGameType === "fmk" ? "/fmk" : startGameType === "budget" ? "/budget" : startGameType === "guess" ? "/guess" : "";
-    const idParam = startGameType === "budget" || startGameType === "guess" ? "game_id" : "category_id";
+    const miniPath = startGameType === "fmk" ? "/fmk" : startGameType === "budget" ? "/budget" : startGameType === "guess" ? "/guess" : startGameType === "position" ? "/position" : "";
+    const idParam = startGameType === "budget" || startGameType === "guess" || startGameType === "position" ? "game_id" : "category_id";
     const miniAppUrl = `${appUrl.replace(/\/$/, "")}${miniPath}/?chat_id=${encodeURIComponent(targetChatId)}&${idParam}=${encodeURIComponent(categoryId)}`;
-    const title = startGameType === "fmk" ? "🔥 <b>Fuck, Marry, Kill</b>" : startGameType === "budget" ? "💰 <b>Influencerinnen Budget Challenge</b>" : startGameType === "guess" ? "🧩 <b>Influencerin erraten</b>" : "🎲 <b>Blind Ranking</b>";
-    const button = startGameType === "fmk" ? "🔥 FMK öffnen" : startGameType === "budget" ? "💰 Budget-Spiel öffnen" : startGameType === "guess" ? "🧩 Ratespiel öffnen" : "🎮 Blind Ranking öffnen";
+    const title = startGameType === "fmk" ? "🔥 <b>Fuck, Marry, Kill</b>" : startGameType === "budget" ? "💰 <b>Influencerinnen Budget Challenge</b>" : startGameType === "guess" ? "🧩 <b>Influencerin erraten</b>" : startGameType === "position" ? "📍 <b>Position Ranking</b>" : "🎲 <b>Blind Ranking</b>";
+    const button = startGameType === "fmk" ? "🔥 FMK öffnen" : startGameType === "budget" ? "💰 Budget-Spiel öffnen" : startGameType === "guess" ? "🧩 Ratespiel öffnen" : startGameType === "position" ? "📍 Position Ranking öffnen" : "🎮 Blind Ranking öffnen";
     await send(token, chatId, `${title}\n\nÖffne jetzt das Spiel:`, {
       reply_markup: { inline_keyboard: [[{ text: button, web_app: { url: miniAppUrl } }]] }
     });

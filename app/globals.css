@@ -129,3 +129,6 @@ h1 { margin-bottom: 10px; letter-spacing: -.02em; }
 }
 
 .guess-helper{margin:0;color:rgba(255,255,255,.68);font-size:.9rem;line-height:1.35}.guess-controls input:focus{border-color:#ff65ae;box-shadow:0 0 0 3px rgba(255,101,174,.16);outline:none}
+
+/* Position Ranking */
+.position-shell{max-width:900px}.position-open-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}.position-open-card{display:grid;gap:10px;padding:12px;border:1px solid #2a3548;border-radius:16px;background:#151c28}.position-open-card img{width:100%;height:auto;max-height:360px;object-fit:contain;background:#080b11;border-radius:12px}.position-open-card select{width:100%;padding:12px;border-radius:12px;border:1px solid #3b82f6;background:#121824;color:#fff;font-size:16px}

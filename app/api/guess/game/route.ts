@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     const { data: people, error: peopleError } = await sb
       .from("guess_people")
-      .select("id,display_name,aliases,sort_order")
+      .select("id,display_name,aliases,distractors,auto_fill_choices,sort_order")
       .eq("game_id", game.id)
       .order("sort_order");
     if (peopleError) throw peopleError;
@@ -58,7 +58,9 @@ export async function POST(request: NextRequest) {
       const personMedia = (media ?? []).filter((entry) => entry.person_id === person.id);
       const configuredMode = ["free_text", "multiple_choice", "mixed"].includes(game.answer_mode) ? game.answer_mode : "free_text";
       const answerMode = configuredMode === "mixed" ? (roundIndex % 2 === 0 ? "free_text" : "multiple_choice") : configuredMode;
-      const distractors = shuffled(choicePool.filter((name) => name.toLocaleLowerCase("de") !== person.display_name.toLocaleLowerCase("de"))).slice(0, 3);
+      const manual = Array.isArray(person.distractors) ? person.distractors.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
+      const automatic = person.auto_fill_choices === false ? [] : shuffled(choicePool.filter((name) => name.toLocaleLowerCase("de") !== person.display_name.toLocaleLowerCase("de") && !manual.some((manualName: string) => manualName.toLocaleLowerCase("de") === name.toLocaleLowerCase("de"))));
+      const distractors = Array.from(new Set([...manual, ...automatic])).slice(0, 3);
       return {
         personId: person.id,
         answerMode: answerMode === "multiple_choice" && distractors.length < 2 ? "free_text" : answerMode,
